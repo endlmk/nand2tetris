@@ -42,10 +42,10 @@ CHIP CPU {
     Not(in=instruction[15], out=isA);
     Mux16(a=oM, b[0..14]=instruction[0..14], sel=isA, out=areg);
     Or(a=isA, b=instruction[5], out=isInA);
-    Register(in=areg, load=isInA, out[0..14]=addressM, out=adrM);
+    ARegister(in=areg, load=isInA, out[0..14]=addressM, out=adrM);
     Mux16(a=adrM, b=inM, sel=instruction[12], out=outAM);
     And(a=instruction[15], b=instruction[4], out=isLoadM);
-    Register(in=oM, load=isLoadM, out=outD);
+    DRegister(in=oM, load=isLoadM, out=outD);
     ALU(x=outD, y=outAM, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], f=instruction[7], no=instruction[6], out=outM, out=oM, zr=outZ, ng=outN);
     And(a=instruction[15], b=instruction[3], out=writeM);
     DMux8Way(in=instruction[15], sel=instruction[0..2], a=null, b=jgt, c=jeq, d=jge, e=jlt, f=jne, g=jle, h=jmp);
