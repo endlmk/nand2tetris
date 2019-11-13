@@ -39,5 +39,31 @@ CHIP CPU {
         pc[15];          // address of next instruction
 
     PARTS:
-    // Put your code here:
+    Not(in=instruction[15], out=isA);
+    Mux16(a=oM, b[0..14]=instruction[0..14], sel=isA, out=areg);
+    Or(a=isA, b=instruction[5], out=isInA);
+    Register(in=areg, load=isInA, out[0..14]=addressM, out=adrM);
+    Mux16(a=adrM, b=inM, sel=instruction[12], out=outAM);
+    And(a=instruction[15], b=instruction[4], out=isLoadM);
+    Register(in=oM, load=isLoadM, out=outD);
+    ALU(x=outD, y=outAM, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], f=instruction[7], no=instruction[6], out=outM, out=oM, zr=outZ, ng=outN);
+    And(a=instruction[15], b=instruction[3], out=writeM);
+    DMux8Way(in=instruction[15], sel=instruction[0..2], a=null, b=jgt, c=jeq, d=jge, e=jlt, f=jne, g=jle, h=jmp);
+    Not(in=outZ, out=outNZ);
+    Not(in=outN, out=outP);
+    And(a=jgt, b=outNZ, out=jgt1);
+    And(a=jgt1, b=outP, out=out1);
+    And(a=jeq, b=outZ, out=out2);
+    Or(a=outP, b=outZ, out=jge1);
+    And(a=jge, b=jge1, out=out3);
+    And(a=jlt, b=outNZ, out=jlt1);
+    And(a=jlt1, b=outN, out=out4);
+    And(a=jne, b=outNZ, out=out5);
+    Or(a=outN, b=outZ, out=jle1);
+    And(a=jle, b=jle1, out=out6);
+    Or8Way(in[0]=out1, in[1]=out2, in[2]=out3, in[3]=out4, in[4]=out5, in[5]=out6, in[6]=jmp, out=outjmp);
+    Not(in=outjmp, out=nojmp);
+    Or(a=isA, b=null, out=isInc1);
+    Or(a=isInc1, b=nojmp, out=isInc);
+    PC(in=adrM, load=outjmp, inc=isInc, reset=reset, out[0..14]=pc);
 }
