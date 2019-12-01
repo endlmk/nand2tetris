@@ -36,7 +36,7 @@ impl<R: io::Read> Parser<R> {
     pub fn hasMoreComments(&mut self) -> bool {
         let mut ln = String::new();
         let mut ln_bytes = self.fs.read_line(&mut ln).unwrap_or_default();
-        while ln_bytes != 0 && (ln.starts_with("//") || ln.eq("\n")) {
+        while ln_bytes != 0 && (ln.starts_with("//") || ln.eq("\r\n")) {
             ln.clear();
             ln_bytes = self.fs.read_line(&mut ln).unwrap_or_default();
         }
@@ -44,7 +44,7 @@ impl<R: io::Read> Parser<R> {
             false
         }
         else {
-            self.cur_line = ln.trim_end_matches('\n').to_string();
+            self.cur_line = ln.trim_end_matches("\r\n").to_string();
             true
         }
     }
@@ -128,7 +128,7 @@ mod tests{
 
     #[test]
     fn hasMoreComments_1() {
-        let s = io::Cursor::new("// comment\n@aaaa");
+        let s = io::Cursor::new("// comment\r\n@aaaa");
         let mut p = Parser::new(s);
         {
             assert_eq!(p.hasMoreComments(), true);
@@ -141,7 +141,7 @@ mod tests{
 
     #[test]
     fn hasMoreComments_2() {
-        let s = io::Cursor::new("// comment\n\n@aaaa");
+        let s = io::Cursor::new("// comment\r\n\r\n@aaaa");
         let mut p = Parser::new(s);
 
         assert_eq!(p.hasMoreComments(), true);
@@ -152,7 +152,7 @@ mod tests{
 
     #[test]
     fn hasMoreComments_3() {
-        let s = io::Cursor::new("DDD ssaf \n// comment\n@aaaa\n\n");
+        let s = io::Cursor::new("DDD ssaf \r\n// comment\r\n@aaaa\r\n\r\n");
         let mut p = Parser::new(s);
 
         assert_eq!(p.hasMoreComments(), true);
