@@ -4,14 +4,10 @@ use std::io::{Write, BufWriter};
 mod parser;
 mod code;
 
-fn main() {
-    let fres = fs::File::open("PongL.asm");
-    if fres.is_err() {
-        println!("{:?}", fres.err());
-        return
-    }
+fn main() -> Result<(), std::io::Error> {
+    let fres = fs::File::open("PongL.asm")?;
     
-    let mut p = parser::Parser::new(fres.unwrap());
+    let mut p = parser::Parser::new(fres);
     let mut hack_code = String::new();
 
     while p.hasMoreComments() {
@@ -66,11 +62,9 @@ fn main() {
     }
 
     print!("{}", hack_code);
-    let hack_file_res = fs::File::create("prog.hack");
-    if hack_file_res.is_err() {
-        println!("{:?}", hack_file_res.err());
-        return
-    }
-    let mut writer = BufWriter::new(hack_file_res.unwrap());
-    writer.write_all(hack_code.as_bytes());
+    let hack_file_res = fs::File::create("prog.hack")?;
+
+    let mut writer = BufWriter::new(hack_file_res);
+    writer.write_all(hack_code.as_bytes())?;
+    Ok(())
 }
