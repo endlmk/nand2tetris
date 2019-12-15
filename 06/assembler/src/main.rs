@@ -1,4 +1,5 @@
 use std::fs;
+use std::env;
 use std::io::{Write, Seek, SeekFrom, BufWriter};
 
 mod parser;
@@ -6,7 +7,12 @@ mod code;
 mod symboltable;
 
 fn main() -> Result<(), std::io::Error> {
-    let f = fs::File::open("Pong.asm")?;
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2  {
+        println!("not enough arguments");
+        return Ok(());
+    }
+    let f = fs::File::open(args[1].clone())?;
     let mut fc = f.try_clone()?;
 
     let mut p1 = parser::Parser::new(f);
