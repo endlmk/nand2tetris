@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{self, BufRead, Read};
 
 pub struct Parser<R: io::Read> {
