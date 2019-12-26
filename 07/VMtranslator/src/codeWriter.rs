@@ -38,7 +38,7 @@ impl<W: io::Write> CodeWriter<W> {
             M=D\r\n\
             ", s, pos);
         
-        let pop_abs_addr_template = |addr: i32| format!("\
+        let pop_abs_addr_or_symbol_template = |s: &str| format!("\
             @SP\r\n\
             M=M-1\r\n\
             @SP\r\n\
@@ -46,7 +46,7 @@ impl<W: io::Write> CodeWriter<W> {
             D=M\r\n\
             @{}\r\n\
             M=D\r\n\
-            ", addr);
+            ", s);
 
         let push_base_addr_template = |s :&str, pos: i32| format!("\
             @{0}\r\n\
@@ -65,7 +65,7 @@ impl<W: io::Write> CodeWriter<W> {
             M=M+1\r\n\
             ", s, pos);
 
-        let push_abs_addr_template = |addr: i32| format!("\
+        let push_abs_addr_or_symbol_template = |s: &str| format!("\
             @{}\r\n\
             D=M\r\n\
             @SP\r\n\
@@ -73,7 +73,7 @@ impl<W: io::Write> CodeWriter<W> {
             M=D\r\n\
             @SP\r\n\
             M=M+1\r\n\
-            ", addr);
+            ", s);
     
         let c = match command {
             parser::CommandType::C_PUSH => {
@@ -92,8 +92,9 @@ impl<W: io::Write> CodeWriter<W> {
                     "argument" => push_base_addr_template("ARG", arg2),
                     "this" => push_base_addr_template("THIS", arg2),
                     "that" => push_base_addr_template("THAT", arg2),
-                    "temp" => push_abs_addr_template(arg2 + 5),
-                    "pointer" => push_abs_addr_template(arg2 + 3),
+                    "temp" => push_abs_addr_or_symbol_template(&(arg2 + 5).to_string()),
+                    "pointer" => push_abs_addr_or_symbol_template(&(arg2 + 3).to_string()),
+                    "static" => push_abs_addr_or_symbol_template(&[&self.fileName_wo_ext, ".", &arg2.to_string()].concat()),
                     _ => String::from(""),
                 }
             },
@@ -103,8 +104,9 @@ impl<W: io::Write> CodeWriter<W> {
                     "argument" => pop_base_addr_template("ARG", arg2),
                     "this" => pop_base_addr_template("THIS", arg2),
                     "that" => pop_base_addr_template("THAT", arg2),
-                    "temp" => pop_abs_addr_template(arg2 + 5),
-                    "pointer" => pop_abs_addr_template(arg2 + 3),
+                    "temp" => pop_abs_addr_or_symbol_template(&(arg2 + 5).to_string()),
+                    "pointer" => pop_abs_addr_or_symbol_template(&(arg2 + 3).to_string()),
+                    "static" => pop_abs_addr_or_symbol_template(&[&self.fileName_wo_ext, ".", &arg2.to_string()].concat()),
                     _ => String::from(""),
                 }
             },
@@ -805,5 +807,43 @@ mod tests{
         assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
     }
 
+    #[test]
+    fn pop_static() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.setFileName("test");
+        cw.writePushPop(parser::CommandType::C_POP, "static", 8);
+
+        let c = "\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @test.8\r\n\
+        M=D\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn push_static() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.setFileName("test");
+        cw.writePushPop(parser::CommandType::C_PUSH, "static", 3);
+
+        let c = "\
+        @test.3\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
 }
 
