@@ -21,11 +21,64 @@ impl<W: io::Write> CodeWriter<W> {
     }
 
     pub fn writePushPop(&mut self, command: parser::CommandType, arg1: &str, arg2: i32) {
-        match command {
+        let pop_base_addr_template = |s :&str, pos: i32| format!("\
+            @{0}\r\n\
+            D=M\r\n\
+            @{1}\r\n\
+            D=D+A\r\n\
+            @13\r\n\
+            M=D\r\n\
+            @SP\r\n\
+            M=M-1\r\n\
+            @SP\r\n\
+            A=M\r\n\
+            D=M\r\n\
+            @13\r\n\
+            A=M\r\n\
+            M=D\r\n\
+            ", s, pos);
+        
+        let pop_abs_addr_template = |addr: i32| format!("\
+            @SP\r\n\
+            M=M-1\r\n\
+            @SP\r\n\
+            A=M\r\n\
+            D=M\r\n\
+            @{}\r\n\
+            M=D\r\n\
+            ", addr);
+
+        let push_base_addr_template = |s :&str, pos: i32| format!("\
+            @{0}\r\n\
+            D=M\r\n\
+            @{1}\r\n\
+            D=D+A\r\n\
+            @13\r\n\
+            M=D\r\n\
+            @13\r\n\
+            A=M\r\n\
+            D=M\r\n\
+            @SP\r\n\
+            A=M\r\n\
+            M=D\r\n\
+            @SP\r\n\
+            M=M+1\r\n\
+            ", s, pos);
+
+        let push_abs_addr_template = |addr: i32| format!("\
+            @{}\r\n\
+            D=M\r\n\
+            @SP\r\n\
+            A=M\r\n\
+            M=D\r\n\
+            @SP\r\n\
+            M=M+1\r\n\
+            ", addr);
+    
+        let c = match command {
             parser::CommandType::C_PUSH => {
                 match arg1 {
-                    "constant" => {
-                        let push_const = format!("\
+                    "constant" => format!("\
                         @{}\r\n\
                         D=A\r\n\
                         @SP\r\n\
@@ -34,14 +87,29 @@ impl<W: io::Write> CodeWriter<W> {
                         @SP\r\n\
                         M=M+1\r\n\
                         ", 
-                        arg2);
-                        self.os.write(push_const.as_bytes());
-                    },
-                    _ => {}
+                        arg2),
+                    "local" => push_base_addr_template("LCL", arg2),
+                    "argument" => push_base_addr_template("ARG", arg2),
+                    "this" => push_base_addr_template("THIS", arg2),
+                    "that" => push_base_addr_template("THAT", arg2),
+                    "temp" => push_abs_addr_template(arg2 + 5),
+                    _ => String::from(""),
                 }
             },
-            parser::CommandType::C_POP => {},
-            _ => {}
+            parser::CommandType::C_POP => {
+                match arg1 {
+                    "local" => pop_base_addr_template("LCL", arg2),
+                    "argument" => pop_base_addr_template("ARG", arg2),
+                    "this" => pop_base_addr_template("THIS", arg2),
+                    "that" => pop_base_addr_template("THAT", arg2),
+                    "temp" => pop_abs_addr_template(arg2 + 5),
+                    _ => String::from(""),
+                }
+            },
+            _ => String::from("")
+        };
+        if !c.is_empty() {
+            self.os.write(c.as_bytes());
         }
     }
     
@@ -139,12 +207,10 @@ mod tests{
     }
 
     #[test]
-    fn const_plus() {
+    fn push_const() {
         let s = io::Cursor::new(Vec::new());
         let mut cw = CodeWriter::new(s);
         cw.writePushPop(parser::CommandType::C_PUSH, "constant", 3);
-        cw.writePushPop(parser::CommandType::C_PUSH, "constant", 4);
-        cw.writeArithmetic("add");
 
         // push constant 3
         let push_const_3 = "\
@@ -157,18 +223,15 @@ mod tests{
         M=M+1\r\n\
         ";
 
-        // push constant 4
-        let push_const_4 = "\
-        @4\r\n\
-        D=A\r\n\
-        @SP\r\n\
-        A=M\r\n\
-        M=D\r\n\
-        @SP\r\n\
-        M=M+1\r\n\
-        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), push_const_3);
+    }
 
-        //add
+    #[test]
+    fn add() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writeArithmetic("add");
+
         let add = "\
         @SP\r\n\
         M=M-1\r\n\
@@ -187,7 +250,7 @@ mod tests{
         M=M+1\r\n\
         ";
 
-        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), [push_const_3, push_const_4, add].concat());
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), add);
     }
 
     #[test]
@@ -481,4 +544,225 @@ mod tests{
 
         assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), [lt1, lt2].concat());
     }
+
+    #[test]
+    fn pop_local() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_POP, "local", 0);
+
+        let pop_local_0 = "\
+        @LCL\r\n\
+        D=M\r\n\
+        @0\r\n\
+        D=D+A\r\n\
+        @13\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @13\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), pop_local_0);
+    }
+
+    #[test]
+    fn pop_arg() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_POP, "argument", 2);
+
+        let c = "\
+        @ARG\r\n\
+        D=M\r\n\
+        @2\r\n\
+        D=D+A\r\n\
+        @13\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @13\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn pop_this() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_POP, "this", 6);
+
+        let c = "\
+        @THIS\r\n\
+        D=M\r\n\
+        @6\r\n\
+        D=D+A\r\n\
+        @13\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @13\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn pop_that() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_POP, "that", 5);
+
+        let c = "\
+        @THAT\r\n\
+        D=M\r\n\
+        @5\r\n\
+        D=D+A\r\n\
+        @13\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @13\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn pop_temp() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_POP, "temp", 6);
+
+        let c = "\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @11\r\n\
+        M=D\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn push_that() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_PUSH, "that", 5);
+
+        let c = "\
+        @THAT\r\n\
+        D=M\r\n\
+        @5\r\n\
+        D=D+A\r\n\
+        @13\r\n\
+        M=D\r\n\
+        @13\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn push_arg() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_PUSH, "argument", 1);
+
+        let c = "\
+        @ARG\r\n\
+        D=M\r\n\
+        @1\r\n\
+        D=D+A\r\n\
+        @13\r\n\
+        M=D\r\n\
+        @13\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn push_this() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_PUSH, "this", 6);
+
+        let c = "\
+        @THIS\r\n\
+        D=M\r\n\
+        @6\r\n\
+        D=D+A\r\n\
+        @13\r\n\
+        M=D\r\n\
+        @13\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn push_temp() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_PUSH, "temp", 6);
+
+        let c = "\
+        @11\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
 }
+
