@@ -93,6 +93,7 @@ impl<W: io::Write> CodeWriter<W> {
                     "this" => push_base_addr_template("THIS", arg2),
                     "that" => push_base_addr_template("THAT", arg2),
                     "temp" => push_abs_addr_template(arg2 + 5),
+                    "pointer" => push_abs_addr_template(arg2 + 3),
                     _ => String::from(""),
                 }
             },
@@ -103,6 +104,7 @@ impl<W: io::Write> CodeWriter<W> {
                     "this" => pop_base_addr_template("THIS", arg2),
                     "that" => pop_base_addr_template("THAT", arg2),
                     "temp" => pop_abs_addr_template(arg2 + 5),
+                    "pointer" => pop_abs_addr_template(arg2 + 3),
                     _ => String::from(""),
                 }
             },
@@ -764,5 +766,44 @@ mod tests{
 
         assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
     }
+
+    #[test]
+    fn pop_pointer() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_POP, "pointer", 0);
+
+        let c = "\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @3\r\n\
+        M=D\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn push_pointer() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writePushPop(parser::CommandType::C_PUSH, "pointer", 1);
+
+        let c = "\
+        @4\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        ";
+
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
 }
 
