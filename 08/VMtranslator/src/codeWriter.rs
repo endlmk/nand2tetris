@@ -190,6 +190,32 @@ impl<W: io::Write> CodeWriter<W> {
             self.os.write(asm.as_bytes());
         }
     }
+
+    pub fn writeLabel(&mut self, label: &str) {
+        let asm = format!("({})\r\n", label);
+        self.os.write(asm.as_bytes());
+    }
+
+    pub fn writeGoto(&mut self, label: &str) {
+        let asm = format!("\
+        @{}\r\n\
+        0;JMP\r\n\
+        ", label);
+        self.os.write(asm.as_bytes());
+    }
+
+    pub fn writeIf(&mut self, label: &str) {
+        let asm = format!("\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @{}\r\n\
+        D;JNE\r\n\
+        ", label);
+        self.os.write(asm.as_bytes());
+    }
 }
 
 #[cfg(test)]
@@ -842,6 +868,49 @@ mod tests{
         M=D\r\n\
         @SP\r\n\
         M=M+1\r\n\
+        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn label() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writeLabel("LOOP");
+
+        let c = "\
+        (LOOP)\r\n\
+        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn goto() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writeGoto("LOOP");
+
+        let c = "\
+        @LOOP\r\n\
+        0;JMP\r\n\
+        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn if_goto() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writeIf("LOOP");
+
+        let c = "\
+        @SP\r\n\
+        M=M-1\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        D=M\r\n\
+        @LOOP\r\n\
+        D;JNE\r\n\
         ";
         assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
     }

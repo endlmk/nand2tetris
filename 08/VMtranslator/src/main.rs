@@ -30,6 +30,15 @@ fn main() -> Result<(), std::io::Error> {
             },
             Some(parser::CommandType::C_ARITHMETIC) => {
                 cw.writeArithmetic(p.arg1());
+            },
+            Some(parser::CommandType::C_LABEL) => {
+                cw.writeLabel(p.arg1());
+            },
+            Some(parser::CommandType::C_GOTO) => {
+                cw.writeGoto(p.arg1());
+            },
+            Some(parser::CommandType::C_IF) => {
+                cw.writeIf(p.arg1());
             }
             _ => {}
         }
