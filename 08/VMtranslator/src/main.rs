@@ -39,7 +39,13 @@ fn main() -> Result<(), std::io::Error> {
             },
             Some(parser::CommandType::C_IF) => {
                 cw.writeIf(p.arg1());
-            }
+            },
+            Some(parser::CommandType::C_FUNCTION) => {
+                cw.writeFunction(p.arg1(), p.arg2());
+            },
+            Some(parser::CommandType::C_RETURN) => {
+                cw.writeReturn();
+            },
             _ => {}
         }
     }
