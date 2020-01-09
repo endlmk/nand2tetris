@@ -5,6 +5,7 @@ pub struct CodeWriter<W: io::Write> {
     os: io::BufWriter<W>,
     fileName_wo_ext: String,
     index_jmp: i32,
+    index_call: i32,
 }
 
 impl<W: io::Write> CodeWriter<W> {
@@ -12,7 +13,8 @@ impl<W: io::Write> CodeWriter<W> {
         CodeWriter {
             os: io::BufWriter::new(writer),
             fileName_wo_ext: String::from(""),
-            index_jmp: 0
+            index_jmp: 0,
+            index_call: 0,
         }
     }
     pub fn setFileName(&mut self, file_name: &str) {
@@ -225,6 +227,10 @@ impl<W: io::Write> CodeWriter<W> {
         @14\r\n\
         M=D\r\n\
         ({0}$LOOP_START)\r\n\
+        @14\r\n\
+        D=M\r\n\
+        @{0}$LOOP_END\r\n\
+        D;JEQ\r\n\
         @0\r\n\
         D=A\r\n\
         @SP\r\n\
@@ -234,10 +240,9 @@ impl<W: io::Write> CodeWriter<W> {
         M=M+1\r\n\
         @14\r\n\
         M=M-1\r\n\
-        @14\r\n\
-        D=M\r\n\
         @{0}$LOOP_START\r\n\
-        D;JNE\r\n\
+        0;JMP\r\n\
+        ({0}$LOOP_END)\r\n\
         ", f_name, num_locals);
         self.os.write(asm.as_bytes());
     }
@@ -303,6 +308,74 @@ impl<W: io::Write> CodeWriter<W> {
         0;JMP\r\n\
         ";
         self.os.write(asm.as_bytes());
+    }
+
+    pub fn writeCall(&mut self, f_name: &str, num_args: i32) {
+        let asm = format!("\
+        @{0}$RETURN_ADDR.{2}\r\n\
+        D=A\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @LCL\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @ARG\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @THIS\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @THAT\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @SP\r\n\
+        D=M\r\n\
+        @{1}\r\n\
+        D=D-A\r\n\
+        @5\r\n\
+        D=D-A\r\n\
+        @ARG\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        D=M\r\n\
+        @LCL\r\n\
+        M=D\r\n\
+        @{0}\r\n\
+        0;JMP\r\n\
+        ({0}$RETURN_ADDR.{2})\r\n\
+        ", f_name, num_args, self.index_call);
+        self.index_call += 1;
+        self.os.write(asm.as_bytes());
+    }
+
+    pub fn writeInit(&mut self) {
+        let asm = "\
+        @256\r\n\
+        D=A\r\n\
+        @SP\r\n\
+        M=D\r\n\
+        ";
+        self.os.write(asm.as_bytes());
+        self.writeCall("Sys.init", 0);
     }
 }
 
@@ -1004,7 +1077,41 @@ mod tests{
     }
 
     #[test]
-    fn function() {
+    fn function_0() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writeFunction("SimpleFunction", 0);
+
+        let c = "\
+        (SimpleFunction)\r\n\
+        @0\r\n\
+        D=A\r\n\
+        @14\r\n\
+        M=D\r\n\
+        (SimpleFunction$LOOP_START)\r\n\
+        @14\r\n\
+        D=M\r\n\
+        @SimpleFunction$LOOP_END\r\n\
+        D;JEQ\r\n\
+        @0\r\n\
+        D=A\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @14\r\n\
+        M=M-1\r\n\
+        @SimpleFunction$LOOP_START\r\n\
+        0;JMP\r\n\
+        (SimpleFunction$LOOP_END)\r\n\
+        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+
+    #[test]
+    fn function_3() {
         let s = io::Cursor::new(Vec::new());
         let mut cw = CodeWriter::new(s);
         cw.writeFunction("SimpleFunction", 3);
@@ -1016,6 +1123,10 @@ mod tests{
         @14\r\n\
         M=D\r\n\
         (SimpleFunction$LOOP_START)\r\n\
+        @14\r\n\
+        D=M\r\n\
+        @SimpleFunction$LOOP_END\r\n\
+        D;JEQ\r\n\
         @0\r\n\
         D=A\r\n\
         @SP\r\n\
@@ -1025,10 +1136,9 @@ mod tests{
         M=M+1\r\n\
         @14\r\n\
         M=M-1\r\n\
-        @14\r\n\
-        D=M\r\n\
         @SimpleFunction$LOOP_START\r\n\
-        D;JNE\r\n\
+        0;JMP\r\n\
+        (SimpleFunction$LOOP_END)\r\n\
         ";
         assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
     }
@@ -1098,6 +1208,134 @@ mod tests{
         @14\r\n\
         A=M\r\n\
         0;JMP\r\n\
+        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+
+
+    #[test]
+    fn call_fn() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writeCall("test", 2);
+
+        let c = "\
+        @test$RETURN_ADDR.0\r\n\
+        D=A\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @LCL\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @ARG\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @THIS\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @THAT\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @SP\r\n\
+        D=M\r\n\
+        @2\r\n\
+        D=D-A\r\n\
+        @5\r\n\
+        D=D-A\r\n\
+        @ARG\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        D=M\r\n\
+        @LCL\r\n\
+        M=D\r\n\
+        @test\r\n\
+        0;JMP\r\n\
+        (test$RETURN_ADDR.0)\r\n\
+        ";
+        assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
+    }
+
+    #[test]
+    fn init() {
+        let s = io::Cursor::new(Vec::new());
+        let mut cw = CodeWriter::new(s);
+        cw.writeInit();
+
+        let c = "\
+        @256\r\n\
+        D=A\r\n\
+        @SP\r\n\
+        M=D\r\n\
+        @Sys.init$RETURN_ADDR.0\r\n\
+        D=A\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @LCL\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @ARG\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @THIS\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @THAT\r\n\
+        D=M\r\n\
+        @SP\r\n\
+        A=M\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        M=M+1\r\n\
+        @SP\r\n\
+        D=M\r\n\
+        @0\r\n\
+        D=D-A\r\n\
+        @5\r\n\
+        D=D-A\r\n\
+        @ARG\r\n\
+        M=D\r\n\
+        @SP\r\n\
+        D=M\r\n\
+        @LCL\r\n\
+        M=D\r\n\
+        @Sys.init\r\n\
+        0;JMP\r\n\
+        (Sys.init$RETURN_ADDR.0)\r\n\
         ";
         assert_eq!(String::from_utf8(cw.os.buffer().to_vec()).unwrap(), c);
     }

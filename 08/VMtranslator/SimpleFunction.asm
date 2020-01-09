@@ -4,6 +4,10 @@ D=A
 @14
 M=D
 (SimpleFunction.test$LOOP_START)
+@14
+D=M
+@SimpleFunction.test$LOOP_END
+D;JMP
 @0
 D=A
 @SP
@@ -13,10 +17,9 @@ M=D
 M=M+1
 @14
 M=M-1
-@14
-D=M
 @SimpleFunction.test$LOOP_START
-D;JNE
+0;JMP
+(SimpleFunction.test$LOOP_END)
 @LCL
 D=M
 @0

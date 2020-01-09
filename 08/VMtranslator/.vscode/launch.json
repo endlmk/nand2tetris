@@ -1,0 +1,45 @@
+{
+    // IntelliSense を使用して利用可能な属性を学べます。
+    // 既存の属性の説明をホバーして表示します。
+    // 詳細情報は次を確認してください: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'VMtranslator'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=VMtranslator",
+                    "--package=VMtranslator"
+                ],
+                "filter": {
+                    "name": "VMtranslator",
+                    "kind": "bin"
+                }
+            },
+            "args": ["FibonacciElement"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'VMtranslator'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=VMtranslator",
+                    "--package=VMtranslator"
+                ],
+                "filter": {
+                    "name": "VMtranslator",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
