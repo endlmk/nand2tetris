@@ -221,4 +221,18 @@ mod tests{
         assert_eq!(t.cur_char, Some(b'*'));
         assert_eq!(t.hasMoreTokens(), false);
     }
+
+    #[test]
+    fn hasMoreTokens_comment5() {
+        let s = io::Cursor::new("\
+        ab // comment\r\n\
+        \r\n\
+        ");
+        let mut t = JackTokenizer::new(s);
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'a'));
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'b'));
+        assert_eq!(t.hasMoreTokens(), false);
+    }
 }
