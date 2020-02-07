@@ -1,10 +1,9 @@
-use std::io::{self, BufRead, Read, Seek};
+use std::io::{self, BufRead, Read, Seek, Write};
 
 pub struct JackTokenizer<R: io::Read + io::Seek> {
     fs: io::BufReader<R>,
     token_type: Option<TokenType>,
     cur_char: Option<u8>,
-    token_buf: String,
     keyword_type: Option<KeywordType>,
     identifier: Option<String>,
     symbol: Option<String>,
@@ -39,6 +38,9 @@ pub enum KeywordType {
     STATIC,
     FIELD,
     LET,
+    DO,
+    IF,
+    ELSE,
     WHILE,
     RETURN,
     TRUE,
@@ -47,6 +49,16 @@ pub enum KeywordType {
     THIS,
 }
 
+#[derive(Clone)]
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum Token {
+    Keyword(KeywordType),
+    Symbol(String),
+    Identifier(String),
+    IntConst(i32),
+    StringConst(String),
+}
 
 impl<R: io::Read + io::Seek> JackTokenizer<R> {
     pub fn new(reader: R) -> Self {
@@ -54,7 +66,6 @@ impl<R: io::Read + io::Seek> JackTokenizer<R> {
             fs: io::BufReader::new(reader),
             token_type: None,
             cur_char: None,
-            token_buf: String::new(),
             keyword_type: None,
             identifier: None,
             symbol: None,
@@ -197,7 +208,8 @@ impl<R: io::Read + io::Seek> JackTokenizer<R> {
 
         // try symbol
         match cur_char {
-            b';' | b'=' => {
+            b';' | b'=' | b'.' | b'(' | b')' | b'[' | b']' | b'{' | b'}' |
+            b',' | b'+' | b'-' | b'*' | b'/' | b'&' | b'|' | b'<' | b'>' | b'~' => {
                 self.token_type = Some(TokenType::SYMBOL);
                 self.symbol = Some(String::from_utf8(vec![cur_char]).unwrap());
                 return;
@@ -228,23 +240,29 @@ impl<R: io::Read + io::Seek> JackTokenizer<R> {
         if cur_char.is_ascii_alphabetic() 
         || cur_char == b'_' {
             let word = read_word(&mut self.cur_char, |c: u8| { c.is_ascii_alphabetic() || c.is_ascii_digit() || (c == b'_') }, &mut self.fs);
+            self.token_type = Some(TokenType::KEYWORD);
             match &*word {
-                "class" => {
-                    self.token_type = Some(TokenType::KEYWORD);
-                    self.keyword_type = Some(KeywordType::CLASS);
-                },
-                "var" => {
-                    self.token_type = Some(TokenType::KEYWORD);
-                    self.keyword_type = Some(KeywordType::VAR);
-                },
-                "int" => {
-                    self.token_type = Some(TokenType::KEYWORD);
-                    self.keyword_type = Some(KeywordType::INT);
-                },
-                "let" => {
-                    self.token_type = Some(TokenType::KEYWORD);
-                    self.keyword_type = Some(KeywordType::LET);
-                },
+                "class" => self.keyword_type = Some(KeywordType::CLASS),
+                "var" => self.keyword_type = Some(KeywordType::VAR),
+                "int" => self.keyword_type = Some(KeywordType::INT),
+                "let" => self.keyword_type = Some(KeywordType::LET),
+                "constructor" => self.keyword_type = Some(KeywordType::CONSTRUCTOR),
+                "function" => self.keyword_type = Some(KeywordType::FUNCTION),
+                "method" => self.keyword_type = Some(KeywordType::METHOD),
+                "field" => self.keyword_type = Some(KeywordType::FIELD),
+                "static" => self.keyword_type = Some(KeywordType::STATIC),
+                "char" => self.keyword_type = Some(KeywordType::CHAR),
+                "boolean" => self.keyword_type = Some(KeywordType::BOOLEAN),
+                "void" => self.keyword_type = Some(KeywordType::VOID),
+                "true" => self.keyword_type = Some(KeywordType::TRUE),
+                "false" => self.keyword_type = Some(KeywordType::FALSE),
+                "null" => self.keyword_type = Some(KeywordType::NULL),
+                "this" => self.keyword_type = Some(KeywordType::THIS),
+                "do" => self.keyword_type = Some(KeywordType::DO),
+                "if" => self.keyword_type = Some(KeywordType::IF),
+                "else" => self.keyword_type = Some(KeywordType::ELSE),
+                "while" => self.keyword_type = Some(KeywordType::WHILE),
+                "return" => self.keyword_type = Some(KeywordType::RETURN),
                 _ => {
                     self.token_type = Some(TokenType::IDENTIFIER);
                     self.identifier = Some(word);
@@ -276,6 +294,87 @@ impl<R: io::Read + io::Seek> JackTokenizer<R> {
 
     pub fn stringVal(&self) -> Option<String> {
         self.string_val.clone()
+    }
+
+    pub fn to_xml(&mut self) -> String {
+        let mut s = String::new();
+        s.push_str(&format!("{}\r\n", create_open_tag("tokens")));
+        for token in self {
+            let elem = match token {
+                Token::Keyword(k) => ["keyword".to_string(), convert_keyword(k)],
+                Token::Symbol(s) => ["symbol".to_string(), escape_symbol(&s)],
+                Token::Identifier(i) => ["identifier".to_string(), i],
+                Token::IntConst(i) => ["integerConstant".to_string(), i.to_string()],
+                Token::StringConst(s) => ["stringConstant".to_string(), s]
+            };
+            let line = format!("{0} {1} {2}\r\n", create_open_tag(&elem[0]), elem[1], create_close_tag(&elem[0]));
+            s.push_str(&line);
+        };
+        s.push_str(&format!("{}\r\n", create_close_tag("tokens")));
+        s
+    }
+}
+fn create_open_tag(name: &str) -> String {
+    format!("<{}>", name) 
+}
+
+fn create_close_tag(name: &str) -> String {
+    format!("</{}>", name) 
+}
+
+fn convert_keyword(keyword_type: KeywordType) -> String {
+    match keyword_type {
+        KeywordType::CLASS => "class",
+        KeywordType::METHOD => "method",
+        KeywordType::FUNCTION => "function",
+        KeywordType::CONSTRUCTOR => "constructor",
+        KeywordType::INT => "int",
+        KeywordType::BOOLEAN => "boolean",
+        KeywordType::CHAR => "char",
+        KeywordType::VOID => "void",
+        KeywordType::VAR => "var",
+        KeywordType::STATIC => "static",
+        KeywordType::FIELD => "field",
+        KeywordType::LET => "let",
+        KeywordType::DO => "do",
+        KeywordType::IF => "if",
+        KeywordType::ELSE => "else",
+        KeywordType::WHILE => "while",
+        KeywordType::RETURN => "return",
+        KeywordType::TRUE => "true",
+        KeywordType::FALSE => "false",
+        KeywordType::NULL => "null",
+        KeywordType::THIS => "this",
+    }.to_string()
+}
+
+fn escape_symbol(s: &str) -> String {
+    match s {
+        "&" => "&amp;",
+        "<" => "&lt;",
+        ">" => "&gt;",
+        _ => s
+    }.to_string()
+}
+
+impl<R: io::Read + io::Seek> Iterator for JackTokenizer<R> {
+    type Item = Token;
+    fn next(&mut self) -> Option<Token> {
+        if self.hasMoreTokens() {
+            self.advance();
+            match self.tokenType() {
+                Some(TokenType::KEYWORD) => Some(Token::Keyword(self.keywordType().unwrap())),
+                Some(TokenType::SYMBOL) => Some(Token::Symbol(self.symbol().unwrap())),
+                Some(TokenType::IDENTIFIER) => Some(Token::Identifier(self.identifier().unwrap())),
+                Some(TokenType::INT_CONST) => Some(Token::IntConst(self.intVal().unwrap())),
+                Some(TokenType::STRING_CONST) => Some(Token::StringConst(self.stringVal().unwrap())),
+                _ => None
+            }
+        }
+        else
+        {
+            None
+        }
     }
 }
 
@@ -541,5 +640,217 @@ mod tests{
         assert_eq!(t.cur_char, Some(b';'));
 
         assert_eq!(t.hasMoreTokens(), false);
+    }
+
+    #[test]
+    fn advance_letstatement3() {
+        let s = io::Cursor::new("\
+        let s = \"A\"; let c = s.charAt(0);\r\n\
+        ");
+        let mut t = JackTokenizer::new(s);
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'l'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::KEYWORD));
+        assert_eq!(t.keywordType(), Some(KeywordType::LET));
+        assert_eq!(t.cur_char, Some(b't'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b's'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::IDENTIFIER));
+        assert_eq!(t.identifier(), Some(String::from("s")));
+        assert_eq!(t.cur_char, Some(b's'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'='));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from("=")));
+        assert_eq!(t.cur_char, Some(b'='));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'"'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::STRING_CONST));
+        assert_eq!(t.stringVal(), Some(String::from("A")));
+        assert_eq!(t.cur_char, Some(b'"'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b';'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from(";")));
+        assert_eq!(t.cur_char, Some(b';'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'l'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::KEYWORD));
+        assert_eq!(t.keywordType(), Some(KeywordType::LET));
+        assert_eq!(t.cur_char, Some(b't'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'c'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::IDENTIFIER));
+        assert_eq!(t.identifier(), Some(String::from("c")));
+        assert_eq!(t.cur_char, Some(b'c'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'='));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from("=")));
+        assert_eq!(t.cur_char, Some(b'='));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b's'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::IDENTIFIER));
+        assert_eq!(t.identifier(), Some(String::from("s")));
+        assert_eq!(t.cur_char, Some(b's'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'.'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from(".")));
+        assert_eq!(t.cur_char, Some(b'.'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'c'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::IDENTIFIER));
+        assert_eq!(t.identifier(), Some(String::from("charAt")));
+        assert_eq!(t.cur_char, Some(b't'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b'('));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from("(")));
+        assert_eq!(t.cur_char, Some(b'('));
+        assert_eq!(t.hasMoreTokens(), true);
+
+        assert_eq!(t.cur_char, Some(b'0'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::INT_CONST));
+        assert_eq!(t.intVal(), Some(0));
+        assert_eq!(t.cur_char, Some(b'0'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b')'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from(")")));
+        assert_eq!(t.cur_char, Some(b')'));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        assert_eq!(t.cur_char, Some(b';'));
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from(";")));
+        assert_eq!(t.cur_char, Some(b';'));
+
+        assert_eq!(t.hasMoreTokens(), false);
+    }
+
+    #[test]
+    fn advance_letstatement4() {
+        let s = io::Cursor::new("\
+        let a[100] = 77; \r\n\
+        ");
+        let mut t = JackTokenizer::new(s);
+
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::KEYWORD));
+        assert_eq!(t.keywordType(), Some(KeywordType::LET));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::IDENTIFIER));
+        assert_eq!(t.identifier(), Some(String::from("a")));
+        
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from("[")));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::INT_CONST));
+        assert_eq!(t.intVal(), Some(100));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from("]")));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from("=")));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::INT_CONST));
+        assert_eq!(t.intVal(), Some(77));
+
+        assert_eq!(t.hasMoreTokens(), true);
+        t.advance();
+        assert_eq!(t.tokenType(), Some(TokenType::SYMBOL));
+        assert_eq!(t.symbol(), Some(String::from(";")));
+
+        assert_eq!(t.hasMoreTokens(), false);
+    }
+
+    #[test]
+    fn tokenizer_square_main() {
+        let s = std::fs::File::open("Square/Main.jack");
+        let mut t = JackTokenizer::new(s.unwrap());
+        let tr = t.to_xml();
+        let mut result_string = String::new();
+        std::fs::File::open("Square/MainT.xml").unwrap().read_to_string(&mut result_string);
+        std::fs::File::create("Square/MainT_tokenizer.xml").unwrap().write_all(tr.as_bytes());
+
+        assert_eq!(result_string, tr);
+    }
+
+    #[test]
+    fn tokenizer_square_square() {
+        let s = std::fs::File::open("Square/Square.jack");
+        let mut t = JackTokenizer::new(s.unwrap());
+        let tr = t.to_xml();
+        let mut result_string = String::new();
+        std::fs::File::open("Square/SquareT.xml").unwrap().read_to_string(&mut result_string);
+        std::fs::File::create("Square/SquareT_tokenizer.xml").unwrap().write_all(tr.as_bytes());
+
+        assert_eq!(result_string, tr);
+    }
+
+    #[test]
+    fn tokenizer_square_squaregame() {
+        let s = std::fs::File::open("Square/SquareGame.jack");
+        let mut t = JackTokenizer::new(s.unwrap());
+        let tr = t.to_xml();
+        let mut result_string = String::new();
+        std::fs::File::open("Square/SquareGameT.xml").unwrap().read_to_string(&mut result_string);
+        std::fs::File::create("Square/SquareGameT_tokenizer.xml").unwrap().write_all(tr.as_bytes());
+
+        assert_eq!(result_string, tr);
+    }
+
+    #[test]
+    fn tokenizer_arraytest() {
+        let s = std::fs::File::open("ArrayTest/Main.jack");
+        let mut t = JackTokenizer::new(s.unwrap());
+        let tr = t.to_xml();
+        let mut result_string = String::new();
+        std::fs::File::open("ArrayTest/MainT.xml").unwrap().read_to_string(&mut result_string);
+        std::fs::File::create("ArrayTest/MainT_tokenizer.xml").unwrap().write_all(tr.as_bytes());
+
+        assert_eq!(result_string, tr);
     }
 }
