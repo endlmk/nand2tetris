@@ -6,6 +6,7 @@ pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     fs: io::BufWriter<W>,
     current_token: Token,
     level: usize,
+    is_lookahead: bool,
 }
 
 enum NodeType {
@@ -21,6 +22,9 @@ enum NodeType {
     WHILE_STATEMENT,
     DO_STATEMENT,
     RETURN_STATEMENT,
+    EXPRESSION_LIST,
+    EXPRESSION,
+    TERM
 }
 
 impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
@@ -30,11 +34,16 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             fs: io::BufWriter::new(writer),
             current_token: Token::Keyword(KeywordType::CLASS),
             level: 0,
+            is_lookahead: false,
         }
     }
 
     fn consume(&mut self) {
+        if self.is_lookahead {
+            return;
+        }
         self.current_token = self.tokenizer.next().unwrap();
+        self.is_lookahead = true;
     }
 
     fn write_node_start(&mut self, node_type: NodeType) {
@@ -50,68 +59,65 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
     }
 
     fn write_current_token(&mut self) {
+        if !self.is_lookahead {
+            self.consume();
+        }
         let s = to_xml_elem(&self.current_token, self.level);
         self.fs.write_all(s.as_bytes());
+        self.is_lookahead = false;
     }
 
     pub fn compileClass(&mut self) {
-        self.consume();
-        assert!(self.current_token == Token::Keyword(KeywordType::CLASS));
         self.write_node_start(NodeType::CLASS);
+
+        // class
+        self.write_current_token();
+        
+        // className
         self.write_current_token();
 
-        self.consume();
-        assert!(enum_eq(&self.current_token, &Token::Identifier("".to_string())));
-        self.write_current_token();
-
-        self.consume();
-        assert!(self.current_token == Token::Symbol("{".to_string()));
+        // {
         self.write_current_token();
         
         while {self.consume();
-            self.current_token == Token::Keyword(KeywordType::STATIC) 
-            || self.current_token == Token::Keyword(KeywordType::FIELD)} {
-                self.compileClassVarDec();
-            }
-
-        if self.current_token == Token::Keyword(KeywordType::CONSTRUCTOR) 
+        self.current_token == Token::Keyword(KeywordType::STATIC) 
+        || self.current_token == Token::Keyword(KeywordType::FIELD)} {
+            self.compileClassVarDec();
+        }
+        
+        while {self.consume();
+        self.current_token == Token::Keyword(KeywordType::CONSTRUCTOR) 
         || self.current_token == Token::Keyword(KeywordType::FUNCTION)
-        || self.current_token == Token::Keyword(KeywordType::METHOD) {
+        || self.current_token == Token::Keyword(KeywordType::METHOD)} {
             self.compileSubroutineDec();
-            while {self.consume();
-            self.current_token == Token::Keyword(KeywordType::CONSTRUCTOR) 
-            || self.current_token == Token::Keyword(KeywordType::FUNCTION)
-            || self.current_token == Token::Keyword(KeywordType::METHOD)} {
-                self.compileSubroutineDec();
-            }
         }
 
-        assert!(self.current_token == Token::Symbol("}".to_string()));
+        // }
         self.write_current_token();
 
-        assert!(self.tokenizer.next().is_none());
         self.write_node_end(NodeType::CLASS);
     }
 
     pub fn compileClassVarDec(&mut self) {
         self.write_node_start(NodeType::CLASS_VAR_DEC);
+
+        // static/field
         self.write_current_token();
 
         // type
-        self.consume();
         self.write_current_token();
 
         // varName
-        self.consume();
         self.write_current_token();
 
         while {self.consume();
-            self.current_token == Token::Symbol(",".to_string())} {
-                self.write_current_token();
-                // varName
-                self.consume();
-                self.write_current_token();
-            }
+        self.current_token == Token::Symbol(",".to_string())} {
+            // ,
+            self.write_current_token();
+ 
+            // varName
+            self.write_current_token();
+        }
 
         // ;
         self.write_current_token();
@@ -121,18 +127,17 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
     pub fn compileSubroutineDec(&mut self) {
         self.write_node_start(NodeType::SUBROUTINE_DEC);
+
+        // constructor/function/method
         self.write_current_token();
 
         // void|type
-        self.consume();
         self.write_current_token();
 
         // subroutineName
-        self.consume();
         self.write_current_token();
 
         // (
-        self.consume();
         self.write_current_token();
 
         // parameterList
@@ -150,7 +155,6 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
     pub fn compileParameterList(&mut self) {
         self.write_node_start(NodeType::PARAMETER_LIST);
 
-        // type
         self.consume();
         // if not type then empty (should be ")")
         if !(self.current_token == Token::Keyword(KeywordType::INT)
@@ -160,22 +164,23 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.write_node_end(NodeType::PARAMETER_LIST);
             return;
         }
+
+        // type
         self.write_current_token();
 
         //varName
-        self.consume();
         self.write_current_token();
         
         // , type varName
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
+            // ,
             self.write_current_token();
+
             //type
-            self.consume();
             self.write_current_token();
 
             //varName
-            self.consume();
             self.write_current_token();
         }
         self.write_node_end(NodeType::PARAMETER_LIST);
@@ -183,8 +188,8 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
     pub fn compileSubroutineBody(&mut self) {
         self.write_node_start(NodeType::SUBROUTINE_BODY);
+
         // {
-        self.consume();
         self.write_current_token();
 
         // varDec*
@@ -204,23 +209,23 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
     pub fn compileVarDec(&mut self) {
         self.write_node_start(NodeType::VAR_DEC);
+
+        // var
         self.write_current_token();
 
         // type
-        self.consume();
         self.write_current_token();
 
         // varName
-        self.consume();
         self.write_current_token();
 
         // (, varName)*
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
+            //,
             self.write_current_token();
 
             // varName
-            self.consume();
             self.write_current_token();
         }
         
@@ -234,6 +239,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::STATEMENTS);
         
         loop {
+            self.consume();
             match self.current_token {
                 Token::Keyword(KeywordType::LET) => self.compileLet(),
                 Token::Keyword(KeywordType::IF) => self.compileIf(),
@@ -249,53 +255,277 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
     pub fn compileLet(&mut self) {
         self.write_node_start(NodeType::LET_STATEMENT);
+
+        // let
         self.write_current_token();
 
-        //TODO:
+        // varName
+        self.write_current_token();
+
+        // [ or =
+        self.consume();
+        if self.current_token == Token::Symbol("[".to_string()) {
+            // [
+            self.write_current_token();
+            
+            self.compileExpression();
+
+            // ] 
+            self.write_current_token();
+            
+            // = 
+            self.write_current_token();
+        }
+        else {
+            // = 
+            self.write_current_token();        
+        }
+
+        self.compileExpression();
+
+        // ;
+        self.write_current_token();
+        
         self.write_node_end(NodeType::LET_STATEMENT);
     }
 
     pub fn compileIf(&mut self) {
         self.write_node_start(NodeType::IF_STATEMENT);
+
+        // if
         self.write_current_token();
 
-        //TODO:
+        // (
+        self.write_current_token();
+        
+        self.compileExpression();
+
+        // )
+        self.write_current_token();
+
+        // {
+        self.write_current_token();
+
+        self.compileStatementes();
+
+        // }
+        self.write_current_token();
+
+        self.consume();
+        if self.current_token == Token::Keyword(KeywordType::ELSE) {
+            // else
+            self.write_current_token();
+
+            // {
+            self.write_current_token();
+
+            self.compileStatementes();
+
+            // }
+            self.write_current_token();
+        }
+
         self.write_node_end(NodeType::IF_STATEMENT);
     }
 
     pub fn compileWhile(&mut self) {
         self.write_node_start(NodeType::WHILE_STATEMENT);
+
+        // while
         self.write_current_token();
 
-        //TODO:
+        // (
+        self.write_current_token();
+
+        self.compileExpression();
+
+        // )
+        self.write_current_token();
+
+        // {
+        self.write_current_token();
+
+        self.compileStatementes();
+
+        // }
+        self.write_current_token();
+
         self.write_node_end(NodeType::WHILE_STATEMENT);
     }
 
     pub fn compileDo(&mut self) {
         self.write_node_start(NodeType::DO_STATEMENT);
+
+        // do
         self.write_current_token();
 
-        //TODO:
+        // identifier
+        self.write_current_token();
+
+        self.consume();
+        if self.current_token == Token::Symbol("(".to_string()) {
+            // (
+            self.write_current_token();
+
+            self.compileExpressionList();
+
+            // )
+            self.write_current_token();
+        } 
+        else if self.current_token == Token::Symbol(".".to_string()) {
+            // .
+            self.write_current_token();
+
+            // subroutineName
+            self.write_current_token();
+
+            // (
+            self.write_current_token();
+
+            self.compileExpressionList();
+
+            // )
+            self.write_current_token();
+        } 
+
+        // ;
+        self.write_current_token();
+       
         self.write_node_end(NodeType::DO_STATEMENT);
     }
 
     pub fn compileReturn(&mut self) {
         self.write_node_start(NodeType::RETURN_STATEMENT);
+        
+        // return
         self.write_current_token();
 
         self.consume();
         if self.current_token != Token::Symbol(";".to_string())
         {
-            // compileExpression
-            // Expressionless version
-            self.write_current_token();
-            self.consume();
+            self.compileExpression();
         }
+
         // ;
         self.write_current_token();
-        self.consume();
-
+        
         self.write_node_end(NodeType::RETURN_STATEMENT);
+    }
+
+    pub fn compileExpressionList(&mut self) {
+        self.write_node_start(NodeType::EXPRESSION_LIST);
+
+        self.consume();
+        if self.current_token == Token::Symbol(")".to_string()) {
+            // Empty
+            self.write_node_end(NodeType::EXPRESSION_LIST);
+            return;
+        }
+
+        self.compileExpression();
+
+        while {self.consume();
+        self.current_token == Token::Symbol(",".to_string())} {
+            // ,
+            self.write_current_token();
+
+            self.compileExpression();
+        }
+
+        self.write_node_end(NodeType::EXPRESSION_LIST);
+    }
+
+    pub fn compileExpression(&mut self) {
+        self.write_node_start(NodeType::EXPRESSION);
+
+        self.compileTerm();
+
+        while {self.consume();
+        self.current_token == Token::Symbol("+".to_string())
+        || self.current_token == Token::Symbol("-".to_string()) 
+        || self.current_token == Token::Symbol("*".to_string()) 
+        || self.current_token == Token::Symbol("/".to_string()) 
+        || self.current_token == Token::Symbol("&".to_string()) 
+        || self.current_token == Token::Symbol("|".to_string()) 
+        || self.current_token == Token::Symbol("<".to_string()) 
+        || self.current_token == Token::Symbol(">".to_string()) 
+        || self.current_token == Token::Symbol("=".to_string())} {
+            // op
+            self.write_current_token();
+
+            self.compileTerm();
+        }
+
+        self.write_node_end(NodeType::EXPRESSION);
+    }
+
+    pub fn compileTerm(&mut self) {
+        self.write_node_start(NodeType::TERM);
+
+        self.consume();
+        if self.current_token == Token::Symbol("(".to_string()) {
+            // (
+            self.write_current_token();
+
+            // expression
+            self.compileExpression();
+
+            // )
+            self.write_current_token();
+        }        
+        else if self.current_token == Token::Symbol("-".to_string())
+        || self.current_token == Token::Symbol("~".to_string()) {
+            // unaryOp
+            self.write_current_token();
+
+            self.compileTerm();
+        }
+        else {
+            // identifier
+            self.write_current_token();
+
+            self.consume();
+            if self.current_token == Token::Symbol(".".to_string()) {
+                // .
+                self.write_current_token();
+
+                // subroutineName
+                self.write_current_token();
+
+                // (
+                self.write_current_token();
+
+                self.compileExpressionList();
+
+                // )
+                self.write_current_token();
+            } 
+            else if self.current_token == Token::Symbol("(".to_string()) {
+                // (
+                self.write_current_token();
+
+                self.compileExpressionList();
+
+                // )
+                self.write_current_token();
+            } 
+            else if self.current_token == Token::Symbol("[".to_string()) {
+                // [
+                self.write_current_token();
+
+                self.compileExpression();
+    
+                // ]
+                self.write_current_token();
+            }
+            else
+            {
+                // integerConst or StringConst or KeywordConst or varName
+                // Nothing to do.
+            }
+        }
+
+        self.write_node_end(NodeType::TERM);
     }
 }
 
@@ -339,6 +569,9 @@ fn convert_node(node_type: NodeType) -> String {
         NodeType::WHILE_STATEMENT => "whileStatement",
         NodeType::DO_STATEMENT => "doStatement",
         NodeType::RETURN_STATEMENT => "returnStatement",
+        NodeType::EXPRESSION_LIST => "expressionList",
+        NodeType::EXPRESSION => "expression",
+        NodeType::TERM => "term",
     }.to_string()
 }
 
@@ -490,5 +723,196 @@ mod tests{
         r.remove(0);
         r = r.replace("\n", "\r\n");
         assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+    }
+    #[test]
+    fn Subroutine_do_statement() {
+        let s = io::Cursor::new("\
+        class Main {\r\n\
+            function void main() {\r\n\
+                var SquareGame game;\r\n\
+                let game = game;\r\n\
+                do game.run();\r\n\
+            }\r\n\
+        }\r\n\
+        ");
+        let w = io::Cursor::new(Vec::new());
+        let mut c = CompilationEngine::new(s, w);
+
+        c.compileClass();
+        let mut r = r#"
+<class>
+  <keyword> class </keyword>
+  <identifier> Main </identifier>
+  <symbol> { </symbol>
+  <subroutineDec>
+    <keyword> function </keyword>
+    <keyword> void </keyword>
+    <identifier> main </identifier>
+    <symbol> ( </symbol>
+    <parameterList>
+    </parameterList>
+    <symbol> ) </symbol>
+    <subroutineBody>
+      <symbol> { </symbol>
+      <varDec>
+        <keyword> var </keyword>
+        <identifier> SquareGame </identifier>
+        <identifier> game </identifier>
+        <symbol> ; </symbol>
+      </varDec>
+      <statements>
+        <letStatement>
+          <keyword> let </keyword>
+          <identifier> game </identifier>
+          <symbol> = </symbol>
+          <expression>
+            <term>
+              <identifier> game </identifier>
+            </term>
+          </expression>
+          <symbol> ; </symbol>
+        </letStatement>
+        <doStatement>
+          <keyword> do </keyword>
+          <identifier> game </identifier>
+          <symbol> . </symbol>
+          <identifier> run </identifier>
+          <symbol> ( </symbol>
+          <expressionList>
+          </expressionList>
+          <symbol> ) </symbol>
+          <symbol> ; </symbol>
+        </doStatement>
+      </statements>
+      <symbol> } </symbol>
+    </subroutineBody>
+  </subroutineDec>
+  <symbol> } </symbol>
+</class>
+"#.to_string();
+        r.remove(0);
+        r = r.replace("\n", "\r\n");
+        assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+    }
+
+    #[test]
+    fn analyze_arraytest() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("ArrayTest/Main.jack");
+            let w = std::fs::File::create("ArrayTest/Main_analyzer.xml");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("ArrayTest/Main.xml").unwrap();
+        let al = std::fs::read_to_string("ArrayTest/Main_analyzer.xml").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn analyze_ExpressionLessSquare_Main() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("ExpressionLessSquare/Main.jack");
+            let w = std::fs::File::create("ExpressionLessSquare/Main_analyzer.xml");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("ExpressionLessSquare/Main.xml").unwrap();
+        let al = std::fs::read_to_string("ExpressionLessSquare/Main_analyzer.xml").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn analyze_ExpressionLessSquare_Square1() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("ExpressionLessSquare/Square.jack");
+            let w = std::fs::File::create("ExpressionLessSquare/Square_analyzer.xml");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("ExpressionLessSquare/Square.xml").unwrap();
+        let al = std::fs::read_to_string("ExpressionLessSquare/Square_analyzer.xml").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn analyze_ExpressionLessSquare_SquareGame() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("ExpressionLessSquare/SquareGame.jack");
+            let w = std::fs::File::create("ExpressionLessSquare/SquareGame_analyzer.xml");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("ExpressionLessSquare/SquareGame.xml").unwrap();
+        let al = std::fs::read_to_string("ExpressionLessSquare/SquareGame_analyzer.xml").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn analyze_Square_Main() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Square/Main.jack");
+            let w = std::fs::File::create("Square/Main_analyzer.xml");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Square/Main.xml").unwrap();
+        let al = std::fs::read_to_string("Square/Main_analyzer.xml").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+
+    #[test]
+    fn analyze_Square_Square1() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Square/Square.jack");
+            let w = std::fs::File::create("Square/Square_analyzer.xml");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Square/Square.xml").unwrap();
+        let al = std::fs::read_to_string("Square/Square_analyzer.xml").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+
+    #[test]
+    fn analyze_Square_SquareGame() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Square/SquareGame.jack");
+            let w = std::fs::File::create("Square/SquareGame_analyzer.xml");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Square/SquareGame.xml").unwrap();
+        let al = std::fs::read_to_string("Square/SquareGame_analyzer.xml").unwrap();
+        assert_eq!(result_string, al);
     }
 }
