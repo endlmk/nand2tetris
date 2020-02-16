@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-struct SymbolTable {
+pub struct SymbolTable {
     class_symbols: HashMap<String, SymbolInfo>,
     subroutine_symbols: HashMap<String, SymbolInfo>,
 }
@@ -16,11 +16,23 @@ enum Scope {
 #[derive(Clone)]
 #[derive(Debug)]
 #[derive(PartialEq)]
-enum VarKind {
+pub enum VarKind {
     STATIC,
     FIELD,
     ARG,
     VAR,
+}
+
+impl std::fmt::Display for VarKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match *self {
+            VarKind::STATIC => "static",
+            VarKind::FIELD => "field",
+            VarKind::ARG => "argument",
+            VarKind::VAR => "var",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 struct SymbolInfo {

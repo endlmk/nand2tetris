@@ -1,5 +1,6 @@
 use std::io::{self, BufRead, Read, Seek, Write};
 use super::JackTokenizer::*;
+use super::SymbolTable::*;
 
 pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     tokenizer: JackTokenizer<R>,
@@ -7,6 +8,7 @@ pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     current_token: Token,
     level: usize,
     is_lookahead: bool,
+    table: SymbolTable,
 }
 
 enum NodeType {
@@ -27,6 +29,72 @@ enum NodeType {
     TERM
 }
 
+#[derive(Clone)]
+#[derive(Debug)]
+#[derive(PartialEq)]
+enum IdentifierCategory {
+    VAR,
+    ARG,
+    STATIC,
+    FIELD,
+    CLASS,
+    SUBROUTINE,
+}
+
+impl std::fmt::Display for IdentifierCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match *self {
+            IdentifierCategory::VAR => "var",
+            IdentifierCategory::ARG => "argument",
+            IdentifierCategory::STATIC => "static",
+            IdentifierCategory::FIELD => "field",
+            IdentifierCategory::CLASS => "class",
+            IdentifierCategory::SUBROUTINE => "subroutine",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Clone)]
+#[derive(Debug)]
+#[derive(PartialEq)]
+enum IdentifierUsage {
+    DEFIEND,
+    USED,
+}
+
+impl std::fmt::Display for IdentifierUsage {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match *self {
+            IdentifierUsage::DEFIEND => "defined",
+            IdentifierUsage::USED => "used",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+struct IdentifierInfo {
+    name: String,
+    cat: IdentifierCategory,
+    usage: IdentifierUsage,
+    varKind: Option<VarKind>,
+    index: Option<i32>,
+}
+
+impl std::fmt::Display for IdentifierInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut v = vec![self.name.clone(), self.cat.to_string(), self.usage.to_string()];
+        if self.varKind.is_some() {
+            v.push(self.varKind.as_ref().unwrap().to_string());
+        }
+        if self.index.is_some() {
+            v.push(self.index.unwrap().to_string());
+        }
+        let s = v.join(", ");
+        write!(f, "{}", s)
+    }
+}
+
 impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
     pub fn new(reader: R, writer: W) -> Self {
         CompilationEngine {
@@ -35,6 +103,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             current_token: Token::Keyword(KeywordType::CLASS),
             level: 0,
             is_lookahead: false,
+            table: SymbolTable::new(),
         }
     }
 
@@ -58,13 +127,31 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.fs.write_all(s.as_bytes());
     }
 
-    fn write_current_token(&mut self) {
+    fn get_current_token(&mut self) -> &Token {
         if !self.is_lookahead {
             self.consume();
         }
-        let s = to_xml_elem(&self.current_token, self.level);
+        &self.current_token
+    }
+
+    fn write_identifier_info(&mut self, info: &IdentifierInfo) {
+        let l = self.level;
+        let s = to_identifier_xml_elem(info, l);
         self.fs.write_all(s.as_bytes());
         self.is_lookahead = false;
+    }
+
+    fn write_current_token(&mut self) {
+        let l = self.level;
+        let s = to_xml_elem(self.get_current_token(), l);
+        self.fs.write_all(s.as_bytes());
+        self.is_lookahead = false;
+    }
+
+    fn write_token(&mut self, tk: &Token) {
+        let l = self.level;
+        let s = to_xml_elem(tk, l);
+        self.fs.write_all(s.as_bytes());
     }
 
     pub fn compileClass(&mut self) {
@@ -74,7 +161,16 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_current_token();
         
         // className
-        self.write_current_token();
+        let tk = self.get_current_token();
+        let elem = convert_token_to_strings(tk);
+        let info = IdentifierInfo{
+            name: elem[1].clone(),
+            cat: IdentifierCategory::CLASS,
+            usage: IdentifierUsage::DEFIEND,
+            varKind: None,
+            index: None,   
+        };
+        self.write_identifier_info(&info);
 
         // {
         self.write_current_token();
@@ -102,21 +198,55 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::CLASS_VAR_DEC);
 
         // static/field
+        let tk_varKind = self.get_current_token();
+        let mut varKind_t = None;
+        if let Token::Keyword(kw) = tk_varKind {
+            if *kw == KeywordType::STATIC {
+                varKind_t = Some(VarKind::STATIC);
+            }
+            else if *kw == KeywordType::FIELD {
+                varKind_t = Some(VarKind::FIELD);
+            } 
+        }
+        let varKind = varKind_t.unwrap();
         self.write_current_token();
 
         // type
+        let tk_type = self.get_current_token();
+        let elem = convert_token_to_strings(tk_type);
+        let type_name = &elem[1];
         self.write_current_token();
 
         // varName
-        self.write_current_token();
+        let tk = self.get_current_token();
+        let elem = convert_token_to_strings(tk);
+        self.table.define(&elem[1], type_name, &varKind.clone());
+        let info = IdentifierInfo{
+            name: elem[1].clone(),
+            cat: IdentifierCategory::FIELD,
+            usage: IdentifierUsage::DEFIEND,
+            varKind: Some(varKind.clone()),
+            index: Some(self.table.indexOf(&elem[1])),   
+        };
+        self.write_identifier_info(&info);
 
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
             // ,
             self.write_current_token();
- 
+
             // varName
-            self.write_current_token();
+            let tk = self.get_current_token();
+            let elem = convert_token_to_strings(tk);
+            self.table.define(&elem[1], type_name, &varKind);
+            let info = IdentifierInfo{
+                name: elem[1].clone(),
+                cat: IdentifierCategory::FIELD,
+                usage: IdentifierUsage::DEFIEND,
+                varKind: Some(varKind.clone()),
+                index: Some(self.table.indexOf(&elem[1])),   
+            };
+            self.write_identifier_info(&info);
         }
 
         // ;
@@ -135,7 +265,16 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_current_token();
 
         // subroutineName
-        self.write_current_token();
+        let tk = self.get_current_token();
+        let elem = convert_token_to_strings(tk);
+        let info = IdentifierInfo{
+            name: elem[1].clone(),
+            cat: IdentifierCategory::SUBROUTINE,
+            usage: IdentifierUsage::DEFIEND,
+            varKind: None,
+            index: None,   
+        };
+        self.write_identifier_info(&info);
 
         // (
         self.write_current_token();
@@ -211,13 +350,46 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::VAR_DEC);
 
         // var
+        let tk_varKind = self.get_current_token();
+        let mut varKind_t = None;
+        if let Token::Keyword(kw) = tk_varKind {
+            if *kw == KeywordType::VAR {
+                varKind_t = Some(VarKind::VAR);
+            }
+        }
+        let varKind = varKind_t.unwrap();
         self.write_current_token();
 
         // type
-        self.write_current_token();
+        let tk_type = self.get_current_token();
+        let elem = convert_token_to_strings(tk_type);
+        let type_name = &elem[1];
+        if let Token::Identifier(_) = tk_type {
+            let info = IdentifierInfo{
+                name: elem[1].clone(),
+                cat: IdentifierCategory::CLASS,
+                usage: IdentifierUsage::USED,
+                varKind: None,
+                index: None,   
+            };
+            self.write_identifier_info(&info);
+        }
+        else {
+            self.write_current_token();
+        }
 
         // varName
-        self.write_current_token();
+        let tk = self.get_current_token();
+        let elem = convert_token_to_strings(tk);
+        self.table.define(&elem[1], type_name, &varKind.clone());
+        let info = IdentifierInfo{
+            name: elem[1].clone(),
+            cat: convert_varKind_to_IdentifierCategory(&varKind),
+            usage: IdentifierUsage::DEFIEND,
+            varKind: Some(varKind.clone()),
+            index: Some(self.table.indexOf(&elem[1])),   
+        };
+        self.write_identifier_info(&info);
 
         // (, varName)*
         while {self.consume();
@@ -226,7 +398,17 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.write_current_token();
 
             // varName
-            self.write_current_token();
+            let tk = self.get_current_token();
+            let elem = convert_token_to_strings(tk);
+            self.table.define(&elem[1], type_name, &varKind.clone());
+            let info = IdentifierInfo{
+                name: elem[1].clone(),
+                cat: IdentifierCategory::FIELD,
+                usage: IdentifierUsage::DEFIEND,
+                varKind: Some(varKind.clone()),
+                index: Some(self.table.indexOf(&elem[1])),   
+            };
+            self.write_identifier_info(&info);
         }
         
         // ;
@@ -260,7 +442,17 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_current_token();
 
         // varName
-        self.write_current_token();
+        let tk = self.get_current_token();
+        let elem = convert_token_to_strings(tk);
+        let vk = self.table.kindOf(&elem[1]);
+        let info = IdentifierInfo{
+            name: elem[1].clone(),
+            cat: convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()),
+            usage: IdentifierUsage::USED,
+            varKind: vk,
+            index: Some(self.table.indexOf(&elem[1])),   
+        };
+        self.write_identifier_info(&info);
 
         // [ or =
         self.consume();
@@ -360,10 +552,24 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_current_token();
 
         // identifier
-        self.write_current_token();
+        let tk = self.get_current_token().clone();
+        // To consume, turn off flag
+        self.is_lookahead = false;
 
         self.consume();
         if self.current_token == Token::Symbol("(".to_string()) {
+            let elem = convert_token_to_strings(&tk);
+            let info = IdentifierInfo {
+                name: elem[1].clone(),
+                cat: IdentifierCategory::SUBROUTINE,
+                usage: IdentifierUsage::USED,
+                varKind: None,
+                index: None,
+            };
+            self.write_identifier_info(&info);
+            // lookahead is not processed, turn on flag
+            self.is_lookahead = true;
+
             // (
             self.write_current_token();
 
@@ -373,11 +579,33 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.write_current_token();
         } 
         else if self.current_token == Token::Symbol(".".to_string()) {
+            let elem = convert_token_to_strings(&tk);
+            let vk = self.table.kindOf(&elem[1]);
+            let info = IdentifierInfo{
+                name: elem[1].clone(),
+                cat: if vk.is_none() { IdentifierCategory::CLASS } else { convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()) },
+                usage: IdentifierUsage::USED,
+                varKind: vk.clone(),
+                index: if vk.is_none() { None } else { Some(self.table.indexOf(&elem[1])) },   
+            };
+            self.write_identifier_info(&info);
+            // lookahead is not processed, turn on flag
+            self.is_lookahead = true;
+
             // .
             self.write_current_token();
 
             // subroutineName
-            self.write_current_token();
+            let tk = self.get_current_token();
+            let elem = convert_token_to_strings(&tk);
+            let info = IdentifierInfo {
+                name: elem[1].clone(),
+                cat: IdentifierCategory::SUBROUTINE,
+                usage: IdentifierUsage::USED,
+                varKind: None,
+                index: None,
+            };
+            self.write_identifier_info(&info);
 
             // (
             self.write_current_token();
@@ -482,15 +710,41 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         }
         else {
             // identifier
-            self.write_current_token();
+            let tk = self.get_current_token().clone();
+            // To consume, turn off flag
+            self.is_lookahead = false;
 
             self.consume();
+            let elem = convert_token_to_strings(&self.current_token);
+            assert_eq!(elem[0], "symbol".to_string());
+            assert_eq!(elem[1], ";".to_string());                
             if self.current_token == Token::Symbol(".".to_string()) {
+                let elem = convert_token_to_strings(&tk);
+                let info = IdentifierInfo {
+                    name: elem[1].clone(),
+                    cat: IdentifierCategory::CLASS,
+                    usage: IdentifierUsage::USED,
+                    varKind: None,
+                    index: None,
+                };
+                self.write_identifier_info(&info);
+                // lookahead is not processed, turn on flag
+                self.is_lookahead = true;
+
                 // .
                 self.write_current_token();
 
                 // subroutineName
-                self.write_current_token();
+                let tk = self.get_current_token().clone();
+                let elem = convert_token_to_strings(&tk);
+                let info = IdentifierInfo {
+                    name: elem[1].clone(),
+                    cat: IdentifierCategory::SUBROUTINE,
+                    usage: IdentifierUsage::USED,
+                    varKind: None,
+                    index: None,
+                };
+                self.write_identifier_info(&info);
 
                 // (
                 self.write_current_token();
@@ -501,6 +755,18 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.write_current_token();
             } 
             else if self.current_token == Token::Symbol("(".to_string()) {
+                let elem = convert_token_to_strings(&tk);
+                let info = IdentifierInfo {
+                    name: elem[1].clone(),
+                    cat: IdentifierCategory::SUBROUTINE,
+                    usage: IdentifierUsage::USED,
+                    varKind: None,
+                    index: None,
+                };
+                self.write_identifier_info(&info);
+                // lookahead is not processed, turn on flag
+                self.is_lookahead = true;
+
                 // (
                 self.write_current_token();
 
@@ -510,6 +776,19 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.write_current_token();
             } 
             else if self.current_token == Token::Symbol("[".to_string()) {
+                let elem = convert_token_to_strings(&tk);
+                let vk = self.table.kindOf(&elem[1]);
+                let info = IdentifierInfo{
+                    name: elem[1].clone(),
+                    cat: convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()),
+                    usage: IdentifierUsage::USED,
+                    varKind: vk,
+                    index: Some(self.table.indexOf(&elem[1])),   
+                };
+                self.write_identifier_info(&info);
+                // lookahead is not processed, turn on flag
+                self.is_lookahead = true;
+                
                 // [
                 self.write_current_token();
 
@@ -518,10 +797,29 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 // ]
                 self.write_current_token();
             }
-            else
-            {
-                // integerConst or StringConst or KeywordConst or varName
-                // Nothing to do.
+            else {
+                // varName
+                if let Token::Identifier(_) = tk {
+                    let elem = convert_token_to_strings(&tk);
+                    let vk = self.table.kindOf(&elem[1]);
+                    let info = IdentifierInfo{
+                        name: elem[1].clone(),
+                        cat: convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()),
+                        usage: IdentifierUsage::USED,
+                        varKind: vk,
+                        index: Some(self.table.indexOf(&elem[1])),   
+                    };
+                    self.write_identifier_info(&info);
+                    let elem = convert_token_to_strings(&self.current_token);
+                    assert_eq!(elem[0], "symbol".to_string());         
+                }
+                else {
+                    // integerConst or StringConst or KeywordConst
+                    self.write_token(&tk);
+                }
+
+                // lookahead is not processed, turn on flag
+                self.is_lookahead = true;
             }
         }
 
@@ -575,16 +873,35 @@ fn convert_node(node_type: NodeType) -> String {
     }.to_string()
 }
 
-fn to_xml_elem(token: &Token, level: usize) -> String {
-    let elem = match token {
+fn convert_token_to_strings(token: &Token) -> [String; 2]
+{
+    match token {
         Token::Keyword(k) => ["keyword".to_string(), convert_keyword(k.clone())],
         Token::Symbol(s) => ["symbol".to_string(), escape_symbol(&s)],
         Token::Identifier(i) => ["identifier".to_string(), i.clone()],
         Token::IntConst(i) => ["integerConstant".to_string(), i.to_string()],
         Token::StringConst(s) => ["stringConstant".to_string(), s.clone()]
-    };
+    }
+}
+
+fn convert_varKind_to_IdentifierCategory(varKind: &VarKind) -> IdentifierCategory {
+    match varKind {
+        VarKind::VAR => IdentifierCategory::VAR,
+        VarKind::ARG => IdentifierCategory::ARG,
+        VarKind::STATIC => IdentifierCategory::STATIC,
+        VarKind::FIELD => IdentifierCategory::FIELD,
+    }
+}
+
+fn to_xml_elem(token: &Token, level: usize) -> String {
+    let elem = convert_token_to_strings(token);
     indentation(&create_xml_elem(&elem[0], &elem[1]), level)
 }
+
+fn to_identifier_xml_elem(info: &IdentifierInfo, level: usize) -> String {
+    indentation(&create_xml_elem("identifier", &info.to_string()), level)
+}
+
 
 fn escape_symbol(s: &str) -> String {
     match s {
@@ -631,7 +948,7 @@ mod tests{
         let mut r = r#"
 <class>
   <keyword> class </keyword>
-  <identifier> Main </identifier>
+  <identifier> Main, class, defined </identifier>
   <symbol> { </symbol>
   <symbol> } </symbol>
 </class>
@@ -656,20 +973,20 @@ mod tests{
         let mut r = r#"
 <class>
   <keyword> class </keyword>
-  <identifier> Main </identifier>
+  <identifier> Main, class, defined </identifier>
   <symbol> { </symbol>
   <classVarDec>
     <keyword> field </keyword>
     <keyword> int </keyword>
-    <identifier> x </identifier>
+    <identifier> x, field, defined, field, 0 </identifier>
     <symbol> , </symbol>
-    <identifier> y </identifier>
+    <identifier> y, field, defined, field, 1 </identifier>
     <symbol> ; </symbol>
   </classVarDec>
   <classVarDec>
     <keyword> field </keyword>
     <keyword> int </keyword>
-    <identifier> size </identifier>
+    <identifier> size, field, defined, field, 2 </identifier>
     <symbol> ; </symbol>
   </classVarDec>
   <symbol> } </symbol>
@@ -696,12 +1013,12 @@ mod tests{
         let mut r = r#"
 <class>
   <keyword> class </keyword>
-  <identifier> Main </identifier>
+  <identifier> Main, class, defined </identifier>
   <symbol> { </symbol>
   <subroutineDec>
     <keyword> function </keyword>
     <keyword> void </keyword>
-    <identifier> main </identifier>
+    <identifier> main, subroutine, defined </identifier>
     <symbol> ( </symbol>
     <parameterList>
     </parameterList>
@@ -742,12 +1059,12 @@ mod tests{
         let mut r = r#"
 <class>
   <keyword> class </keyword>
-  <identifier> Main </identifier>
+  <identifier> Main, class, defined </identifier>
   <symbol> { </symbol>
   <subroutineDec>
     <keyword> function </keyword>
     <keyword> void </keyword>
-    <identifier> main </identifier>
+    <identifier> main, subroutine, defined </identifier>
     <symbol> ( </symbol>
     <parameterList>
     </parameterList>
@@ -756,27 +1073,27 @@ mod tests{
       <symbol> { </symbol>
       <varDec>
         <keyword> var </keyword>
-        <identifier> SquareGame </identifier>
-        <identifier> game </identifier>
+        <identifier> SquareGame, class, used </identifier>
+        <identifier> game, var, defined, var, 0 </identifier>
         <symbol> ; </symbol>
       </varDec>
       <statements>
         <letStatement>
           <keyword> let </keyword>
-          <identifier> game </identifier>
+          <identifier> game, var, used, var, 0 </identifier>
           <symbol> = </symbol>
           <expression>
             <term>
-              <identifier> game </identifier>
+              <identifier> game, var, used, var, 0 </identifier>
             </term>
           </expression>
           <symbol> ; </symbol>
         </letStatement>
         <doStatement>
           <keyword> do </keyword>
-          <identifier> game </identifier>
+          <identifier> game, var, used, var, 0 </identifier>
           <symbol> . </symbol>
-          <identifier> run </identifier>
+          <identifier> run, subroutine, used </identifier>
           <symbol> ( </symbol>
           <expressionList>
           </expressionList>
@@ -793,126 +1110,5 @@ mod tests{
         r.remove(0);
         r = r.replace("\n", "\r\n");
         assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
-    }
-
-    #[test]
-    fn analyze_arraytest() {
-        // CompilationEngine must be scoped to drop.
-        // If not, BufWriter will not be flushed. 
-        {
-            let s = std::fs::File::open("ArrayTest/Main.jack");
-            let w = std::fs::File::create("ArrayTest/Main_analyzer.xml");
-
-            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
-            c.compileClass();
-        }
-
-        let result_string = std::fs::read_to_string("ArrayTest/Main.xml").unwrap();
-        let al = std::fs::read_to_string("ArrayTest/Main_analyzer.xml").unwrap();
-        assert_eq!(result_string, al);
-    }
-
-    #[test]
-    fn analyze_ExpressionLessSquare_Main() {
-        // CompilationEngine must be scoped to drop.
-        // If not, BufWriter will not be flushed. 
-        {
-            let s = std::fs::File::open("ExpressionLessSquare/Main.jack");
-            let w = std::fs::File::create("ExpressionLessSquare/Main_analyzer.xml");
-
-            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
-            c.compileClass();
-        }
-
-        let result_string = std::fs::read_to_string("ExpressionLessSquare/Main.xml").unwrap();
-        let al = std::fs::read_to_string("ExpressionLessSquare/Main_analyzer.xml").unwrap();
-        assert_eq!(result_string, al);
-    }
-
-    #[test]
-    fn analyze_ExpressionLessSquare_Square1() {
-        // CompilationEngine must be scoped to drop.
-        // If not, BufWriter will not be flushed. 
-        {
-            let s = std::fs::File::open("ExpressionLessSquare/Square.jack");
-            let w = std::fs::File::create("ExpressionLessSquare/Square_analyzer.xml");
-
-            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
-            c.compileClass();
-        }
-
-        let result_string = std::fs::read_to_string("ExpressionLessSquare/Square.xml").unwrap();
-        let al = std::fs::read_to_string("ExpressionLessSquare/Square_analyzer.xml").unwrap();
-        assert_eq!(result_string, al);
-    }
-
-    #[test]
-    fn analyze_ExpressionLessSquare_SquareGame() {
-        // CompilationEngine must be scoped to drop.
-        // If not, BufWriter will not be flushed. 
-        {
-            let s = std::fs::File::open("ExpressionLessSquare/SquareGame.jack");
-            let w = std::fs::File::create("ExpressionLessSquare/SquareGame_analyzer.xml");
-
-            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
-            c.compileClass();
-        }
-
-        let result_string = std::fs::read_to_string("ExpressionLessSquare/SquareGame.xml").unwrap();
-        let al = std::fs::read_to_string("ExpressionLessSquare/SquareGame_analyzer.xml").unwrap();
-        assert_eq!(result_string, al);
-    }
-
-    #[test]
-    fn analyze_Square_Main() {
-        // CompilationEngine must be scoped to drop.
-        // If not, BufWriter will not be flushed. 
-        {
-            let s = std::fs::File::open("Square/Main.jack");
-            let w = std::fs::File::create("Square/Main_analyzer.xml");
-
-            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
-            c.compileClass();
-        }
-
-        let result_string = std::fs::read_to_string("Square/Main.xml").unwrap();
-        let al = std::fs::read_to_string("Square/Main_analyzer.xml").unwrap();
-        assert_eq!(result_string, al);
-    }
-
-
-    #[test]
-    fn analyze_Square_Square1() {
-        // CompilationEngine must be scoped to drop.
-        // If not, BufWriter will not be flushed. 
-        {
-            let s = std::fs::File::open("Square/Square.jack");
-            let w = std::fs::File::create("Square/Square_analyzer.xml");
-
-            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
-            c.compileClass();
-        }
-
-        let result_string = std::fs::read_to_string("Square/Square.xml").unwrap();
-        let al = std::fs::read_to_string("Square/Square_analyzer.xml").unwrap();
-        assert_eq!(result_string, al);
-    }
-
-
-    #[test]
-    fn analyze_Square_SquareGame() {
-        // CompilationEngine must be scoped to drop.
-        // If not, BufWriter will not be flushed. 
-        {
-            let s = std::fs::File::open("Square/SquareGame.jack");
-            let w = std::fs::File::create("Square/SquareGame_analyzer.xml");
-
-            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap());
-            c.compileClass();
-        }
-
-        let result_string = std::fs::read_to_string("Square/SquareGame.xml").unwrap();
-        let al = std::fs::read_to_string("Square/SquareGame_analyzer.xml").unwrap();
-        assert_eq!(result_string, al);
     }
 }
