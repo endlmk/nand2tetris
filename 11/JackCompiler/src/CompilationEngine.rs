@@ -107,6 +107,14 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         }
     }
 
+    fn consume_eq(&mut self, tk: &Token) -> bool {
+        if self.current_token != *tk {
+            return false;
+        }
+        self.current_token = self.tokenizer.next().unwrap();
+        true
+    }
+
     fn consume(&mut self) {
         if self.is_lookahead {
             return;
@@ -134,6 +142,14 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         &self.current_token
     }
 
+    fn get_current_token_name(&mut self) -> String {
+        convert_token_to_strings(&self.current_token)[1].clone()
+    }
+
+    fn is_current_token_identifier(&mut self) -> bool {
+        if let Token::Identifier(_) = &self.current_token { true } else { false }
+    }
+
     fn write_identifier_info(&mut self, info: &IdentifierInfo) {
         let l = self.level;
         let s = to_identifier_xml_elem(info, l);
@@ -141,7 +157,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.is_lookahead = false;
     }
 
-    fn write_current_token(&mut self) {
+    fn write_token_with_consume(&mut self) {
         let l = self.level;
         let s = to_xml_elem(self.get_current_token(), l);
         self.fs.write_all(s.as_bytes());
@@ -157,14 +173,18 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
     pub fn compileClass(&mut self) {
         self.write_node_start(NodeType::CLASS);
 
+        // first token.
+        // TODO:Should be initialized.
+        //self.current_token = self.tokenizer.next().unwrap();
+
         // class
-        self.write_current_token();
+        self.write_token_with_consume();
         
         // className
-        let tk = self.get_current_token();
-        let elem = convert_token_to_strings(tk);
+        self.consume();
+        let class_name = self.get_current_token_name();
         let info = IdentifierInfo{
-            name: elem[1].clone(),
+            name: class_name,
             cat: IdentifierCategory::CLASS,
             usage: IdentifierUsage::DEFIEND,
             varKind: None,
@@ -173,7 +193,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_identifier_info(&info);
 
         // {
-        self.write_current_token();
+        self.write_token_with_consume();
         
         while {self.consume();
         self.current_token == Token::Keyword(KeywordType::STATIC) 
@@ -189,7 +209,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         }
 
         // }
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.write_node_end(NodeType::CLASS);
     }
@@ -198,59 +218,70 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::CLASS_VAR_DEC);
 
         // static/field
-        let tk_varKind = self.get_current_token();
+        let var_kind_name = self.get_current_token_name();
         let mut varKind_t = None;
-        if let Token::Keyword(kw) = tk_varKind {
-            if *kw == KeywordType::STATIC {
-                varKind_t = Some(VarKind::STATIC);
-            }
-            else if *kw == KeywordType::FIELD {
-                varKind_t = Some(VarKind::FIELD);
-            } 
+        if  var_kind_name == "static" {
+            varKind_t = Some(VarKind::STATIC);
         }
+        else if var_kind_name == "field"  {
+            varKind_t = Some(VarKind::FIELD);
+        } 
         let varKind = varKind_t.unwrap();
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // type
-        let tk_type = self.get_current_token();
-        let elem = convert_token_to_strings(tk_type);
-        let type_name = &elem[1];
-        self.write_current_token();
+        self.consume();
+        let type_name = self.get_current_token_name();
+        if self.current_token == Token::Keyword(KeywordType::INT)
+        || self.current_token == Token::Keyword(KeywordType::CHAR)
+        || self.current_token == Token::Keyword(KeywordType::BOOLEAN) {
+            self.write_token_with_consume();
+        }
+        else if self.is_current_token_identifier() {
+            let info = IdentifierInfo{
+                name: type_name.clone(),
+                cat: IdentifierCategory::CLASS,
+                usage: IdentifierUsage::USED,
+                varKind: None,
+                index: None,   
+            };
+            self.write_identifier_info(&info);
+        }
 
         // varName
-        let tk = self.get_current_token();
-        let elem = convert_token_to_strings(tk);
-        self.table.define(&elem[1], type_name, &varKind.clone());
+        self.consume();
+        let var_name = self.get_current_token_name();
+        self.table.define(&var_name, &type_name, &varKind);
         let info = IdentifierInfo{
-            name: elem[1].clone(),
-            cat: IdentifierCategory::FIELD,
+            name: var_name.clone(),
+            cat: convert_varKind_to_IdentifierCategory(&varKind),
             usage: IdentifierUsage::DEFIEND,
             varKind: Some(varKind.clone()),
-            index: Some(self.table.indexOf(&elem[1])),   
+            index: Some(self.table.indexOf(&var_name)),   
         };
         self.write_identifier_info(&info);
 
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
             // ,
-            self.write_current_token();
+            self.write_token_with_consume();
 
             // varName
-            let tk = self.get_current_token();
-            let elem = convert_token_to_strings(tk);
-            self.table.define(&elem[1], type_name, &varKind);
+            self.consume();
+            let var_name = self.get_current_token_name();
+            self.table.define(&var_name, &type_name, &varKind);
             let info = IdentifierInfo{
-                name: elem[1].clone(),
+                name: var_name.clone(),
                 cat: IdentifierCategory::FIELD,
                 usage: IdentifierUsage::DEFIEND,
                 varKind: Some(varKind.clone()),
-                index: Some(self.table.indexOf(&elem[1])),   
+                index: Some(self.table.indexOf(&var_name)),   
             };
             self.write_identifier_info(&info);
         }
 
         // ;
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.write_node_end(NodeType::CLASS_VAR_DEC);
     }
@@ -259,16 +290,33 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::SUBROUTINE_DEC);
 
         // constructor/function/method
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // void|type
-        self.write_current_token();
+        self.consume();
+        if self.current_token == Token::Keyword(KeywordType::VOID)
+        || self.current_token == Token::Keyword(KeywordType::INT)
+        || self.current_token == Token::Keyword(KeywordType::CHAR)
+        || self.current_token == Token::Keyword(KeywordType::BOOLEAN) {
+            self.write_token_with_consume();
+        }
+        else if self.is_current_token_identifier() {
+            let class_name = self.get_current_token_name();
+            let info = IdentifierInfo{
+                name: class_name.clone(),
+                cat: IdentifierCategory::CLASS,
+                usage: IdentifierUsage::USED,
+                varKind: None,
+                index: None,   
+            };
+            self.write_identifier_info(&info);
+        }
 
         // subroutineName
-        let tk = self.get_current_token();
-        let elem = convert_token_to_strings(tk);
+        self.consume();
+        let sr_name = self.get_current_token_name();
         let info = IdentifierInfo{
-            name: elem[1].clone(),
+            name: sr_name.clone(),
             cat: IdentifierCategory::SUBROUTINE,
             usage: IdentifierUsage::DEFIEND,
             varKind: None,
@@ -277,13 +325,13 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_identifier_info(&info);
 
         // (
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // parameterList
         self.compileParameterList();
 
         // )
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // subroutineBody
         self.compileSubroutineBody();
@@ -295,32 +343,83 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::PARAMETER_LIST);
 
         self.consume();
+
         // if not type then empty (should be ")")
-        if !(self.current_token == Token::Keyword(KeywordType::INT)
-        || self.current_token == Token::Keyword(KeywordType::CHAR)
-        || self.current_token == Token::Keyword(KeywordType::BOOLEAN)
-        || enum_eq(&self.current_token, &Token::Identifier("".to_string()))) {
+        if self.current_token == Token::Symbol(")".to_string()) {
             self.write_node_end(NodeType::PARAMETER_LIST);
             return;
         }
 
         // type
-        self.write_current_token();
+        let type_name = self.get_current_token_name();
+        if self.current_token == Token::Keyword(KeywordType::INT)
+        || self.current_token == Token::Keyword(KeywordType::CHAR)
+        || self.current_token == Token::Keyword(KeywordType::BOOLEAN) {
+            self.write_token_with_consume();
+        }
+        else if self.is_current_token_identifier() {
+            let info = IdentifierInfo{
+                name: type_name.clone(),
+                cat: IdentifierCategory::CLASS,
+                usage: IdentifierUsage::USED,
+                varKind: None,
+                index: None,   
+            };
+            self.write_identifier_info(&info);
+        }
 
         //varName
-        self.write_current_token();
+        self.consume();
+        let var_name = self.get_current_token_name();
+        let varKind = VarKind::ARG;
+        self.table.define(&var_name, &type_name, &varKind);
+        let info = IdentifierInfo{
+            name: var_name.clone(),
+            cat: convert_varKind_to_IdentifierCategory(&varKind),
+            usage: IdentifierUsage::DEFIEND,
+            varKind: Some(varKind.clone()),
+            index: Some(self.table.indexOf(&var_name)),   
+        };
+        self.write_identifier_info(&info);
         
         // , type varName
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
             // ,
-            self.write_current_token();
+            self.write_token_with_consume();
 
-            //type
-            self.write_current_token();
+            // type
+            self.consume();
+            let type_name = self.get_current_token_name();
+            if self.current_token == Token::Keyword(KeywordType::INT)
+            || self.current_token == Token::Keyword(KeywordType::CHAR)
+            || self.current_token == Token::Keyword(KeywordType::BOOLEAN) {
+                self.write_token_with_consume();
+            }
+            else if self.is_current_token_identifier() {
+                let info = IdentifierInfo{
+                    name: type_name.clone(),
+                    cat: IdentifierCategory::CLASS,
+                    usage: IdentifierUsage::USED,
+                    varKind: None,
+                    index: None,   
+                };
+                self.write_identifier_info(&info);
+            }
 
             //varName
-            self.write_current_token();
+            self.consume();
+            let var_name = self.get_current_token_name();
+            let varKind = VarKind::ARG;
+            self.table.define(&var_name, &type_name, &varKind);
+            let info = IdentifierInfo{
+                name: var_name.clone(),
+                cat: convert_varKind_to_IdentifierCategory(&varKind),
+                usage: IdentifierUsage::DEFIEND,
+                varKind: Some(varKind.clone()),
+                index: Some(self.table.indexOf(&var_name)),   
+            };
+            self.write_identifier_info(&info);
         }
         self.write_node_end(NodeType::PARAMETER_LIST);
     }
@@ -329,7 +428,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::SUBROUTINE_BODY);
 
         // {
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // varDec*
         while {self.consume();
@@ -341,7 +440,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.compileStatementes();
 
         // }
-        self.write_current_token();
+        self.write_token_with_consume();
         
         self.write_node_end(NodeType::SUBROUTINE_BODY);
     }
@@ -350,23 +449,15 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::VAR_DEC);
 
         // var
-        let tk_varKind = self.get_current_token();
-        let mut varKind_t = None;
-        if let Token::Keyword(kw) = tk_varKind {
-            if *kw == KeywordType::VAR {
-                varKind_t = Some(VarKind::VAR);
-            }
-        }
-        let varKind = varKind_t.unwrap();
-        self.write_current_token();
+        let varKind = VarKind::VAR;
+        self.write_token_with_consume();
 
         // type
-        let tk_type = self.get_current_token();
-        let elem = convert_token_to_strings(tk_type);
-        let type_name = &elem[1];
-        if let Token::Identifier(_) = tk_type {
+        self.consume();
+        let type_name = self.get_current_token_name();
+        if self.is_current_token_identifier() {
             let info = IdentifierInfo{
-                name: elem[1].clone(),
+                name: type_name.clone(),
                 cat: IdentifierCategory::CLASS,
                 usage: IdentifierUsage::USED,
                 varKind: None,
@@ -375,19 +466,19 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.write_identifier_info(&info);
         }
         else {
-            self.write_current_token();
+            self.write_token_with_consume();
         }
 
         // varName
-        let tk = self.get_current_token();
-        let elem = convert_token_to_strings(tk);
-        self.table.define(&elem[1], type_name, &varKind.clone());
+        self.consume();
+        let var_name = self.get_current_token_name();
+        self.table.define(&var_name, &type_name, &varKind);
         let info = IdentifierInfo{
-            name: elem[1].clone(),
+            name: var_name.clone(),
             cat: convert_varKind_to_IdentifierCategory(&varKind),
             usage: IdentifierUsage::DEFIEND,
             varKind: Some(varKind.clone()),
-            index: Some(self.table.indexOf(&elem[1])),   
+            index: Some(self.table.indexOf(&var_name)),   
         };
         self.write_identifier_info(&info);
 
@@ -395,24 +486,24 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
             //,
-            self.write_current_token();
+            self.write_token_with_consume();
 
             // varName
-            let tk = self.get_current_token();
-            let elem = convert_token_to_strings(tk);
-            self.table.define(&elem[1], type_name, &varKind.clone());
+            self.consume();
+            let var_name = self.get_current_token_name();
+            self.table.define(&var_name, &type_name, &varKind);
             let info = IdentifierInfo{
-                name: elem[1].clone(),
+                name: var_name.clone(),
                 cat: IdentifierCategory::FIELD,
                 usage: IdentifierUsage::DEFIEND,
                 varKind: Some(varKind.clone()),
-                index: Some(self.table.indexOf(&elem[1])),   
+                index: Some(self.table.indexOf(&var_name)),   
             };
             self.write_identifier_info(&info);
         }
         
         // ;
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.write_node_end(NodeType::VAR_DEC);
     }
@@ -439,18 +530,18 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::LET_STATEMENT);
 
         // let
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // varName
-        let tk = self.get_current_token();
-        let elem = convert_token_to_strings(tk);
-        let vk = self.table.kindOf(&elem[1]);
+        self.consume();
+        let var_name = self.get_current_token_name();
+        let varKind = self.table.kindOf(&var_name).unwrap();
         let info = IdentifierInfo{
-            name: elem[1].clone(),
-            cat: convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()),
+            name: var_name.clone(),
+            cat: convert_varKind_to_IdentifierCategory(&varKind),
             usage: IdentifierUsage::USED,
-            varKind: vk,
-            index: Some(self.table.indexOf(&elem[1])),   
+            varKind: Some(varKind.clone()),
+            index: Some(self.table.indexOf(&var_name)),   
         };
         self.write_identifier_info(&info);
 
@@ -458,25 +549,25 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.consume();
         if self.current_token == Token::Symbol("[".to_string()) {
             // [
-            self.write_current_token();
+            self.write_token_with_consume();
             
             self.compileExpression();
 
             // ] 
-            self.write_current_token();
+            self.write_token_with_consume();
             
             // = 
-            self.write_current_token();
+            self.write_token_with_consume();
         }
         else {
             // = 
-            self.write_current_token();        
+            self.write_token_with_consume();        
         }
 
         self.compileExpression();
 
         // ;
-        self.write_current_token();
+        self.write_token_with_consume();
         
         self.write_node_end(NodeType::LET_STATEMENT);
     }
@@ -485,36 +576,36 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::IF_STATEMENT);
 
         // if
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // (
-        self.write_current_token();
+        self.write_token_with_consume();
         
         self.compileExpression();
 
         // )
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // {
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.compileStatementes();
 
         // }
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.consume();
         if self.current_token == Token::Keyword(KeywordType::ELSE) {
             // else
-            self.write_current_token();
+            self.write_token_with_consume();
 
             // {
-            self.write_current_token();
+            self.write_token_with_consume();
 
             self.compileStatementes();
 
             // }
-            self.write_current_token();
+            self.write_token_with_consume();
         }
 
         self.write_node_end(NodeType::IF_STATEMENT);
@@ -524,23 +615,23 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::WHILE_STATEMENT);
 
         // while
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // (
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.compileExpression();
 
         // )
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // {
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.compileStatementes();
 
         // }
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.write_node_end(NodeType::WHILE_STATEMENT);
     }
@@ -549,18 +640,17 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::DO_STATEMENT);
 
         // do
-        self.write_current_token();
+        self.write_token_with_consume();
 
         // identifier
-        let tk = self.get_current_token().clone();
-        // To consume, turn off flag
+        self.consume();
+        let name = self.get_current_token_name();
         self.is_lookahead = false;
 
         self.consume();
         if self.current_token == Token::Symbol("(".to_string()) {
-            let elem = convert_token_to_strings(&tk);
             let info = IdentifierInfo {
-                name: elem[1].clone(),
+                name: name.clone(),
                 cat: IdentifierCategory::SUBROUTINE,
                 usage: IdentifierUsage::USED,
                 varKind: None,
@@ -571,35 +661,34 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.is_lookahead = true;
 
             // (
-            self.write_current_token();
+            self.write_token_with_consume();
 
             self.compileExpressionList();
 
             // )
-            self.write_current_token();
+            self.write_token_with_consume();
         } 
         else if self.current_token == Token::Symbol(".".to_string()) {
-            let elem = convert_token_to_strings(&tk);
-            let vk = self.table.kindOf(&elem[1]);
+            let vk = self.table.kindOf(&name);
             let info = IdentifierInfo{
-                name: elem[1].clone(),
+                name: name.clone(),
                 cat: if vk.is_none() { IdentifierCategory::CLASS } else { convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()) },
                 usage: IdentifierUsage::USED,
                 varKind: vk.clone(),
-                index: if vk.is_none() { None } else { Some(self.table.indexOf(&elem[1])) },   
+                index: if vk.is_none() { None } else { Some(self.table.indexOf(&name)) },   
             };
             self.write_identifier_info(&info);
             // lookahead is not processed, turn on flag
             self.is_lookahead = true;
 
             // .
-            self.write_current_token();
+            self.write_token_with_consume();
 
             // subroutineName
-            let tk = self.get_current_token();
-            let elem = convert_token_to_strings(&tk);
+            self.consume();
+            let sr_name = self.get_current_token_name();
             let info = IdentifierInfo {
-                name: elem[1].clone(),
+                name: sr_name,
                 cat: IdentifierCategory::SUBROUTINE,
                 usage: IdentifierUsage::USED,
                 varKind: None,
@@ -608,16 +697,16 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.write_identifier_info(&info);
 
             // (
-            self.write_current_token();
+            self.write_token_with_consume();
 
             self.compileExpressionList();
 
             // )
-            self.write_current_token();
+            self.write_token_with_consume();
         } 
 
         // ;
-        self.write_current_token();
+        self.write_token_with_consume();
        
         self.write_node_end(NodeType::DO_STATEMENT);
     }
@@ -626,7 +715,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::RETURN_STATEMENT);
         
         // return
-        self.write_current_token();
+        self.write_token_with_consume();
 
         self.consume();
         if self.current_token != Token::Symbol(";".to_string())
@@ -635,7 +724,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         }
 
         // ;
-        self.write_current_token();
+        self.write_token_with_consume();
         
         self.write_node_end(NodeType::RETURN_STATEMENT);
     }
@@ -655,7 +744,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
             // ,
-            self.write_current_token();
+            self.write_token_with_consume();
 
             self.compileExpression();
         }
@@ -679,7 +768,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         || self.current_token == Token::Symbol(">".to_string()) 
         || self.current_token == Token::Symbol("=".to_string())} {
             // op
-            self.write_current_token();
+            self.write_token_with_consume();
 
             self.compileTerm();
         }
@@ -691,37 +780,38 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_start(NodeType::TERM);
 
         self.consume();
-        if self.current_token == Token::Symbol("(".to_string()) {
+
+        if !self.is_current_token_identifier() {   
+            // integerConst or StringConst or KeywordConst
+            self.write_token_with_consume();
+        }
+        else if self.current_token == Token::Symbol("(".to_string()) {
             // (
-            self.write_current_token();
+            self.write_token_with_consume();
 
             // expression
             self.compileExpression();
 
             // )
-            self.write_current_token();
+            self.write_token_with_consume();
         }        
         else if self.current_token == Token::Symbol("-".to_string())
         || self.current_token == Token::Symbol("~".to_string()) {
             // unaryOp
-            self.write_current_token();
+            self.write_token_with_consume();
 
             self.compileTerm();
         }
         else {
             // identifier
-            let tk = self.get_current_token().clone();
-            // To consume, turn off flag
+            let name = self.get_current_token_name();
             self.is_lookahead = false;
 
             self.consume();
-            let elem = convert_token_to_strings(&self.current_token);
-            assert_eq!(elem[0], "symbol".to_string());
-            assert_eq!(elem[1], ";".to_string());                
+            let elem = convert_token_to_strings(&self.current_token);             
             if self.current_token == Token::Symbol(".".to_string()) {
-                let elem = convert_token_to_strings(&tk);
                 let info = IdentifierInfo {
-                    name: elem[1].clone(),
+                    name: name,
                     cat: IdentifierCategory::CLASS,
                     usage: IdentifierUsage::USED,
                     varKind: None,
@@ -732,13 +822,13 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.is_lookahead = true;
 
                 // .
-                self.write_current_token();
+                self.write_token_with_consume();
 
                 // subroutineName
-                let tk = self.get_current_token().clone();
-                let elem = convert_token_to_strings(&tk);
+                self.consume();
+                let sr_name = self.get_current_token_name();
                 let info = IdentifierInfo {
-                    name: elem[1].clone(),
+                    name: sr_name,
                     cat: IdentifierCategory::SUBROUTINE,
                     usage: IdentifierUsage::USED,
                     varKind: None,
@@ -747,17 +837,16 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.write_identifier_info(&info);
 
                 // (
-                self.write_current_token();
+                self.write_token_with_consume();
 
                 self.compileExpressionList();
 
                 // )
-                self.write_current_token();
+                self.write_token_with_consume();
             } 
             else if self.current_token == Token::Symbol("(".to_string()) {
-                let elem = convert_token_to_strings(&tk);
                 let info = IdentifierInfo {
-                    name: elem[1].clone(),
+                    name: name,
                     cat: IdentifierCategory::SUBROUTINE,
                     usage: IdentifierUsage::USED,
                     varKind: None,
@@ -768,55 +857,45 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.is_lookahead = true;
 
                 // (
-                self.write_current_token();
+                self.write_token_with_consume();
 
                 self.compileExpressionList();
 
                 // )
-                self.write_current_token();
+                self.write_token_with_consume();
             } 
             else if self.current_token == Token::Symbol("[".to_string()) {
-                let elem = convert_token_to_strings(&tk);
-                let vk = self.table.kindOf(&elem[1]);
+                let vk = self.table.kindOf(&name);
                 let info = IdentifierInfo{
-                    name: elem[1].clone(),
+                    name: name.clone(),
                     cat: convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()),
                     usage: IdentifierUsage::USED,
                     varKind: vk,
-                    index: Some(self.table.indexOf(&elem[1])),   
+                    index: Some(self.table.indexOf(&name)),   
                 };
                 self.write_identifier_info(&info);
                 // lookahead is not processed, turn on flag
                 self.is_lookahead = true;
                 
                 // [
-                self.write_current_token();
+                self.write_token_with_consume();
 
                 self.compileExpression();
     
                 // ]
-                self.write_current_token();
+                self.write_token_with_consume();
             }
             else {
                 // varName
-                if let Token::Identifier(_) = tk {
-                    let elem = convert_token_to_strings(&tk);
-                    let vk = self.table.kindOf(&elem[1]);
-                    let info = IdentifierInfo{
-                        name: elem[1].clone(),
-                        cat: convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()),
-                        usage: IdentifierUsage::USED,
-                        varKind: vk,
-                        index: Some(self.table.indexOf(&elem[1])),   
-                    };
-                    self.write_identifier_info(&info);
-                    let elem = convert_token_to_strings(&self.current_token);
-                    assert_eq!(elem[0], "symbol".to_string());         
-                }
-                else {
-                    // integerConst or StringConst or KeywordConst
-                    self.write_token(&tk);
-                }
+                let vk = self.table.kindOf(&name);
+                let info = IdentifierInfo{
+                    name: name.clone(),
+                    cat: convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()),
+                    usage: IdentifierUsage::USED,
+                    varKind: vk,
+                    index: Some(self.table.indexOf(&name)),   
+                };
+                self.write_identifier_info(&info);
 
                 // lookahead is not processed, turn on flag
                 self.is_lookahead = true;
@@ -1100,6 +1179,135 @@ mod tests{
           <symbol> ) </symbol>
           <symbol> ; </symbol>
         </doStatement>
+      </statements>
+      <symbol> } </symbol>
+    </subroutineBody>
+  </subroutineDec>
+  <symbol> } </symbol>
+</class>
+"#.to_string();
+        r.remove(0);
+        r = r.replace("\n", "\r\n");
+        assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+    }
+
+
+    #[test]
+    fn Subroutine_field_test() {
+        let s = io::Cursor::new("\
+        class Square {\r\n\
+            static boolean test;\r\n\
+            field int x, y; // screen location of the square's top-left corner\r\n\
+            field int size; // length of this square, in pixels\r\n\
+            /** Constructs a new square with a given location and size. */\r\n\
+            constructor Square new(int Ax, int Ay, int Asize) {\r\n\
+               let x = Ax;\r\n\
+               let y = Ay;\r\n\
+               let size = Asize;\r\n\
+               do draw();\r\n\
+               return this;\r\n\
+            }\r\n\
+        }\r\n\
+        ");
+        let w = io::Cursor::new(Vec::new());
+        let mut c = CompilationEngine::new(s, w);
+
+        c.compileClass();
+        let mut r = r#"
+<class>
+  <keyword> class </keyword>
+  <identifier> Square, class, defined </identifier>
+  <symbol> { </symbol>
+  <classVarDec>
+    <keyword> static </keyword>
+    <keyword> boolean </keyword>
+    <identifier> test, static, defined, static, 0 </identifier>
+    <symbol> ; </symbol>
+  </classVarDec>
+  <classVarDec>
+    <keyword> field </keyword>
+    <keyword> int </keyword>
+    <identifier> x, field, defined, field, 0 </identifier>
+    <symbol> , </symbol>
+    <identifier> y, field, defined, field, 1 </identifier>
+    <symbol> ; </symbol>
+  </classVarDec>
+  <classVarDec>
+    <keyword> field </keyword>
+    <keyword> int </keyword>
+    <identifier> size, field, defined, field, 2 </identifier>
+    <symbol> ; </symbol>
+  </classVarDec>
+  <subroutineDec>
+    <keyword> constructor </keyword>
+    <identifier> Square, class, used </identifier>
+    <identifier> new, subroutine, defined </identifier>
+    <symbol> ( </symbol>
+    <parameterList>
+      <keyword> int </keyword>
+      <identifier> Ax, argument, defined, argument, 0 </identifier>
+      <symbol> , </symbol>
+      <keyword> int </keyword>
+      <identifier> Ay, argument, defined, argument, 1 </identifier>
+      <symbol> , </symbol>
+      <keyword> int </keyword>
+      <identifier> Asize, argument, defined, argument, 2 </identifier>
+    </parameterList>
+    <symbol> ) </symbol>
+    <subroutineBody>
+      <symbol> { </symbol>
+      <statements>
+        <letStatement>
+          <keyword> let </keyword>
+          <identifier> x, field, used, field, 0 </identifier>
+          <symbol> = </symbol>
+          <expression>
+            <term>
+              <identifier> Ax, argument, used, argument, 0 </identifier>
+            </term>
+          </expression>
+          <symbol> ; </symbol>
+        </letStatement>
+        <letStatement>
+          <keyword> let </keyword>
+          <identifier> y, field, used, field, 1 </identifier>
+          <symbol> = </symbol>
+          <expression>
+            <term>
+              <identifier> Ay, argument, used, argument, 1 </identifier>
+            </term>
+          </expression>
+          <symbol> ; </symbol>
+        </letStatement>
+        <letStatement>
+          <keyword> let </keyword>
+          <identifier> size, field, used, field, 2 </identifier>
+          <symbol> = </symbol>
+          <expression>
+            <term>
+              <identifier> Asize, argument, used, argument, 2 </identifier>
+            </term>
+          </expression>
+          <symbol> ; </symbol>
+        </letStatement>
+        <doStatement>
+          <keyword> do </keyword>
+          <identifier> draw, subroutine, used </identifier>
+          <symbol> ( </symbol>
+          <expressionList>
+          </expressionList>
+          <symbol> ) </symbol>
+          <symbol> ; </symbol>
+        </doStatement>
+        <returnStatement>
+          <keyword> return </keyword>
+          <expression>
+            <term>
+              <keyword> this </keyword>
+            </term>
+          </expression>
+          <symbol> ; </symbol>
+        </returnStatement>
       </statements>
       <symbol> } </symbol>
     </subroutineBody>
