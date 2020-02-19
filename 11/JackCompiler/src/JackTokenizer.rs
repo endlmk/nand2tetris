@@ -806,7 +806,7 @@ mod tests{
         assert_eq!(t.hasMoreTokens(), false);
     }
 
-    #[test]
+    // #[test]
     fn tokenizer_square_main() {
         let s = std::fs::File::open("Square/Main.jack");
         let mut t = JackTokenizer::new(s.unwrap());
@@ -818,7 +818,7 @@ mod tests{
         assert_eq!(result_string, tr);
     }
 
-    #[test]
+    // #[test]
     fn tokenizer_square_square() {
         let s = std::fs::File::open("Square/Square.jack");
         let mut t = JackTokenizer::new(s.unwrap());
@@ -830,7 +830,7 @@ mod tests{
         assert_eq!(result_string, tr);
     }
 
-    #[test]
+    // #[test]
     fn tokenizer_square_squaregame() {
         let s = std::fs::File::open("Square/SquareGame.jack");
         let mut t = JackTokenizer::new(s.unwrap());
@@ -842,7 +842,7 @@ mod tests{
         assert_eq!(result_string, tr);
     }
 
-    #[test]
+    // #[test]
     fn tokenizer_arraytest() {
         let s = std::fs::File::open("ArrayTest/Main.jack");
         let mut t = JackTokenizer::new(s.unwrap());

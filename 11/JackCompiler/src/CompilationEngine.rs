@@ -9,6 +9,7 @@ pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     level: usize,
     is_lookahead: bool,
     table: SymbolTable,
+    xml_mode: bool,
 }
 
 enum NodeType {
@@ -104,6 +105,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             level: 0,
             is_lookahead: false,
             table: SymbolTable::new(),
+            xml_mode: true,
         }
     }
 
@@ -125,14 +127,14 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
     fn write_node_start(&mut self, node_type: NodeType) {
         let s = indentation(&create_open_tag(&convert_node(node_type)), self.level);
-        self.fs.write_all(s.as_bytes());
+        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
         self.level += 2;
     }
 
     fn write_node_end(&mut self, node_type: NodeType) {
         self.level -= 2;
         let s = indentation(&create_close_tag(&convert_node(node_type)), self.level);
-        self.fs.write_all(s.as_bytes());
+        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
     }
 
     fn get_current_token(&mut self) -> &Token {
@@ -153,21 +155,15 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
     fn write_identifier_info(&mut self, info: &IdentifierInfo) {
         let l = self.level;
         let s = to_identifier_xml_elem(info, l);
-        self.fs.write_all(s.as_bytes());
+        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
         self.is_lookahead = false;
     }
 
     fn write_token_with_consume(&mut self) {
         let l = self.level;
         let s = to_xml_elem(self.get_current_token(), l);
-        self.fs.write_all(s.as_bytes());
+        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
         self.is_lookahead = false;
-    }
-
-    fn write_token(&mut self, tk: &Token) {
-        let l = self.level;
-        let s = to_xml_elem(tk, l);
-        self.fs.write_all(s.as_bytes());
     }
 
     pub fn compileClass(&mut self) {
