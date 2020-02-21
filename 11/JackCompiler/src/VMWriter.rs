@@ -21,7 +21,7 @@ pub enum Segment {
 impl std::fmt::Display for Segment {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let s = match *self {
-            Segment::CONST => "const",
+            Segment::CONST => "constant",
             Segment::ARG => "argument",
             Segment::LOCAL => "local",
             Segment::STATIC => "static",
@@ -115,5 +115,9 @@ impl<W: Write> VMWriter<W> {
 
     pub fn writeReturn(&mut self) {
         self.fs.write_all("return\r\n".as_bytes());
+    }
+
+    pub fn dump_string(&mut self) -> String {
+        String::from_utf8(self.fs.buffer().to_vec()).unwrap()
     }
 }

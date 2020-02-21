@@ -1,8 +1,9 @@
 use std::io::{self, BufRead, Read, Seek, Write};
 use super::JackTokenizer::*;
 use super::SymbolTable::*;
+use super::VMWriter::*;
 
-pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
+pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write + Clone> {
     tokenizer: JackTokenizer<R>,
     fs: io::BufWriter<W>,
     current_token: Token,
@@ -10,6 +11,8 @@ pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     is_lookahead: bool,
     table: SymbolTable,
     xml_mode: bool,
+    vw: VMWriter<W>,
+    class_name: String, 
 }
 
 enum NodeType {
@@ -96,16 +99,18 @@ impl std::fmt::Display for IdentifierInfo {
     }
 }
 
-impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
+impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
     pub fn new(reader: R, writer: W) -> Self {
         CompilationEngine {
             tokenizer: JackTokenizer::new(reader),
-            fs: io::BufWriter::new(writer),
+            fs: io::BufWriter::new(writer.clone()),
             current_token: Token::Keyword(KeywordType::CLASS),
             level: 0,
             is_lookahead: false,
             table: SymbolTable::new(),
             xml_mode: true,
+            vw: VMWriter::new(writer),
+            class_name: "".to_string(),
         }
     }
 
@@ -187,6 +192,8 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             index: None,   
         };
         self.write_identifier_info(&info);
+
+        self.class_name = info.name;
 
         // {
         self.write_token_with_consume();
@@ -311,23 +318,25 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         // subroutineName
         self.consume();
         let sr_name = self.get_current_token_name();
-        let info = IdentifierInfo{
+        let sr_info = IdentifierInfo{
             name: sr_name.clone(),
             cat: IdentifierCategory::SUBROUTINE,
             usage: IdentifierUsage::DEFIEND,
             varKind: None,
             index: None,   
         };
-        self.write_identifier_info(&info);
+        self.write_identifier_info(&sr_info);
 
         // (
         self.write_token_with_consume();
 
         // parameterList
-        self.compileParameterList();
+        let args = self.compileParameterList();
 
         // )
         self.write_token_with_consume();
+
+        self.vw.writeFunction(&get_classfunc_name(&self.class_name, &sr_info.name), args);
 
         // subroutineBody
         self.compileSubroutineBody();
@@ -335,16 +344,20 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         self.write_node_end(NodeType::SUBROUTINE_DEC);
     }
 
-    pub fn compileParameterList(&mut self) {
+    pub fn compileParameterList(&mut self) -> i32 {
         self.write_node_start(NodeType::PARAMETER_LIST);
 
         self.consume();
 
+        let mut args = 0;
+
         // if not type then empty (should be ")")
         if self.current_token == Token::Symbol(")".to_string()) {
             self.write_node_end(NodeType::PARAMETER_LIST);
-            return;
+            return args;
         }
+
+        args += 1;
 
         // type
         let type_name = self.get_current_token_name();
@@ -381,6 +394,9 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         // , type varName
         while {self.consume();
         self.current_token == Token::Symbol(",".to_string())} {
+
+            args += 1;
+
             // ,
             self.write_token_with_consume();
 
@@ -418,6 +434,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.write_identifier_info(&info);
         }
         self.write_node_end(NodeType::PARAMETER_LIST);
+        return args;
     }
 
     pub fn compileSubroutineBody(&mut self) {
@@ -659,10 +676,12 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             // (
             self.write_token_with_consume();
 
-            self.compileExpressionList();
+            let args = self.compileExpressionList();
 
             // )
             self.write_token_with_consume();
+
+            self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), args);
         } 
         else if self.current_token == Token::Symbol(".".to_string()) {
             let vk = self.table.kindOf(&name);
@@ -683,26 +702,36 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             // subroutineName
             self.consume();
             let sr_name = self.get_current_token_name();
-            let info = IdentifierInfo {
+            let sr_info = IdentifierInfo {
                 name: sr_name,
                 cat: IdentifierCategory::SUBROUTINE,
                 usage: IdentifierUsage::USED,
                 varKind: None,
                 index: None,
             };
-            self.write_identifier_info(&info);
+            self.write_identifier_info(&sr_info);
 
             // (
             self.write_token_with_consume();
 
-            self.compileExpressionList();
+            let args = self.compileExpressionList();
 
             // )
             self.write_token_with_consume();
+
+            if info.cat == IdentifierCategory::CLASS {
+                self.vw.writeCall(&get_classfunc_name(&info.name, &sr_info.name), args);
+            }
+            else {
+
+            }
         } 
 
         // ;
         self.write_token_with_consume();
+
+        // pop 0 for void function.
+        self.vw.writePop(Segment::TEMP, 0);
        
         self.write_node_end(NodeType::DO_STATEMENT);
     }
@@ -718,23 +747,32 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         {
             self.compileExpression();
         }
+        else {
+            // void return
+            self.vw.writePush(Segment::CONST, 0);
+        }
 
         // ;
         self.write_token_with_consume();
         
         self.write_node_end(NodeType::RETURN_STATEMENT);
+
+        self.vw.writeReturn();
     }
 
-    pub fn compileExpressionList(&mut self) {
+    pub fn compileExpressionList(&mut self) -> i32 {
         self.write_node_start(NodeType::EXPRESSION_LIST);
+
+        let mut args = 0;
 
         self.consume();
         if self.current_token == Token::Symbol(")".to_string()) {
             // Empty
             self.write_node_end(NodeType::EXPRESSION_LIST);
-            return;
+            return args;
         }
 
+        args += 1;
         self.compileExpression();
 
         while {self.consume();
@@ -742,10 +780,12 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             // ,
             self.write_token_with_consume();
 
+            args += 1;
             self.compileExpression();
         }
 
         self.write_node_end(NodeType::EXPRESSION_LIST);
+        return args;
     }
 
     pub fn compileExpression(&mut self) {
@@ -763,10 +803,13 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         || self.current_token == Token::Symbol("<".to_string()) 
         || self.current_token == Token::Symbol(">".to_string()) 
         || self.current_token == Token::Symbol("=".to_string())} {
+            let op_token = self.current_token.clone();
             // op
             self.write_token_with_consume();
 
             self.compileTerm();
+
+            self.write_arithmetic(&op_token);
         }
 
         self.write_node_end(NodeType::EXPRESSION);
@@ -777,10 +820,19 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
         self.consume();
 
-        if !self.is_current_token_identifier() {   
-            // integerConst or StringConst or KeywordConst
+        if let Token::IntConst(i) = &self.current_token {
+            self.vw.writePush(Segment::CONST, *i);
+            // integerConst
             self.write_token_with_consume();
         }
+        else if let Token::StringConst(s) = &self.current_token {
+            // StringConst
+            self.write_token_with_consume();
+        }
+        else if let Token::Keyword(kw) = &self.current_token {
+            // KeywordConst
+            self.write_token_with_consume();
+        } 
         else if self.current_token == Token::Symbol("(".to_string()) {
             // (
             self.write_token_with_consume();
@@ -793,10 +845,13 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         }        
         else if self.current_token == Token::Symbol("-".to_string())
         || self.current_token == Token::Symbol("~".to_string()) {
+            let op_token = self.current_token.clone();
             // unaryOp
             self.write_token_with_consume();
 
             self.compileTerm();
+
+            self.write_arithmetic(&op_token);
         }
         else {
             // identifier
@@ -806,14 +861,14 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.consume();
             let elem = convert_token_to_strings(&self.current_token);             
             if self.current_token == Token::Symbol(".".to_string()) {
-                let info = IdentifierInfo {
+                let class_info = IdentifierInfo {
                     name: name,
                     cat: IdentifierCategory::CLASS,
                     usage: IdentifierUsage::USED,
                     varKind: None,
                     index: None,
                 };
-                self.write_identifier_info(&info);
+                self.write_identifier_info(&class_info);
                 // lookahead is not processed, turn on flag
                 self.is_lookahead = true;
 
@@ -823,22 +878,24 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 // subroutineName
                 self.consume();
                 let sr_name = self.get_current_token_name();
-                let info = IdentifierInfo {
+                let sr_info = IdentifierInfo {
                     name: sr_name,
                     cat: IdentifierCategory::SUBROUTINE,
                     usage: IdentifierUsage::USED,
                     varKind: None,
                     index: None,
                 };
-                self.write_identifier_info(&info);
+                self.write_identifier_info(&sr_info);
 
                 // (
                 self.write_token_with_consume();
 
-                self.compileExpressionList();
+                let args = self.compileExpressionList();
 
                 // )
                 self.write_token_with_consume();
+
+                self.vw.writeCall(&get_classfunc_name(&class_info.name, &sr_info.name), args);
             } 
             else if self.current_token == Token::Symbol("(".to_string()) {
                 let info = IdentifierInfo {
@@ -855,10 +912,12 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 // (
                 self.write_token_with_consume();
 
-                self.compileExpressionList();
+                let args = self.compileExpressionList();
 
                 // )
                 self.write_token_with_consume();
+
+                self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), args);
             } 
             else if self.current_token == Token::Symbol("[".to_string()) {
                 let vk = self.table.kindOf(&name);
@@ -900,6 +959,25 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
         self.write_node_end(NodeType::TERM);
     }
+
+    fn write_arithmetic(&mut self, tk: &Token) {
+        match tk {
+            Token::Symbol(s) => match s.as_str() {
+                "+" => { self.vw.writeArithmetic(Command::ADD); },
+                "-" => { self.vw.writeArithmetic(Command::SUB); },
+                "*" => { self.vw.writeCall("Math.multiply", 2); },
+                "/" => { self.vw.writeCall("Math.divide", 2); },
+                "&" => { self.vw.writeArithmetic(Command::AND); },
+                "|" => { self.vw.writeArithmetic(Command::OR); },
+                "<" => { self.vw.writeArithmetic(Command::GT); },
+                ">" => { self.vw.writeArithmetic(Command::LT); },
+                "=" => { self.vw.writeArithmetic(Command::EQ); },
+                _ => {},
+            }
+            _ => {},
+        }
+    }
+    
 }
 
 fn convert_keyword(keyword_type: KeywordType) -> String {
@@ -1005,6 +1083,10 @@ fn indentation(s: &str, level: usize) -> String {
 
 fn enum_eq<T>(a: &T, b: &T) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
+}
+
+fn get_classfunc_name(class_name: &str, func_name: &str) -> String {
+    [class_name, func_name].join(".")
 }
 
 #[cfg(test)]
@@ -1314,5 +1396,41 @@ mod tests{
         r.remove(0);
         r = r.replace("\n", "\r\n");
         assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+    }
+
+
+    #[test]
+    fn CodeGenaration_Seven() {
+        let s = io::Cursor::new("\
+        class Main {\r\n\
+            \r\n\
+           function void main() {\r\n\
+              do Output.printInt(1 + (2 * 3));\r\n\
+              return;\r\n\
+           }\r\n\
+           \r\n\
+        }\r\n\
+        ");
+        let w = io::Cursor::new(Vec::new());
+        let mut c = CompilationEngine::new(s, w);
+        // c.xml_mode = false;
+        c.compileClass();
+
+        let mut r = r#"
+function Main.main 0
+push constant 1
+push constant 2
+push constant 3
+call Math.multiply 2
+add
+call Output.printInt 1
+pop temp 0
+push constant 0
+return
+"#.to_string();
+        r.remove(0);
+        r = r.replace("\n", "\r\n");
+        // assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+        assert_eq!(c.vw.dump_string(), r);
     }
 }
