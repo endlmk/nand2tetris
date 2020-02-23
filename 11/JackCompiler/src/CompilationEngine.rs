@@ -3,7 +3,7 @@ use super::JackTokenizer::*;
 use super::SymbolTable::*;
 use super::VMWriter::*;
 
-pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write + Clone> {
+pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     tokenizer: JackTokenizer<R>,
     fs: io::BufWriter<W>,
     current_token: Token,
@@ -13,6 +13,9 @@ pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write + Clone> {
     xml_mode: bool,
     vw: VMWriter<W>,
     class_name: String, 
+    subroutine_name: String,
+    next_if_label: i32,
+    next_while_label: i32,
 }
 
 enum NodeType {
@@ -99,18 +102,21 @@ impl std::fmt::Display for IdentifierInfo {
     }
 }
 
-impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
-    pub fn new(reader: R, writer: W) -> Self {
+impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
+    pub fn new(reader: R, writer_xml: W, writer_vm: W) -> Self {
         CompilationEngine {
             tokenizer: JackTokenizer::new(reader),
-            fs: io::BufWriter::new(writer.clone()),
+            fs: io::BufWriter::new(writer_xml),
             current_token: Token::Keyword(KeywordType::CLASS),
             level: 0,
             is_lookahead: false,
             table: SymbolTable::new(),
             xml_mode: true,
-            vw: VMWriter::new(writer),
+            vw: VMWriter::new(writer_vm),
             class_name: "".to_string(),
+            subroutine_name: "".to_string(),
+            next_if_label: 0,
+            next_while_label: 0,
         }
     }
 
@@ -292,6 +298,9 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
     pub fn compileSubroutineDec(&mut self) {
         self.write_node_start(NodeType::SUBROUTINE_DEC);
 
+        // Clear Subroutine Symbol Table
+        self.table.startSubroutine();
+
         // constructor/function/method
         self.write_token_with_consume();
 
@@ -327,6 +336,8 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
         };
         self.write_identifier_info(&sr_info);
 
+        self.subroutine_name = sr_info.name.clone();
+
         // (
         self.write_token_with_consume();
 
@@ -335,8 +346,6 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
 
         // )
         self.write_token_with_consume();
-
-        self.vw.writeFunction(&get_classfunc_name(&self.class_name, &sr_info.name), args);
 
         // subroutineBody
         self.compileSubroutineBody();
@@ -443,11 +452,18 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
         // {
         self.write_token_with_consume();
 
+        let mut locals = 0;
         // varDec*
         while {self.consume();
         self.current_token == Token::Keyword(KeywordType::VAR)} {
-            self.compileVarDec();
+            locals += self.compileVarDec();
         }
+
+        self.vw.writeFunction(&get_classfunc_name(&self.class_name, &self.subroutine_name), locals);
+
+        // reset if/while label
+        self.next_if_label = 0;
+        self.next_while_label = 0;
 
         // statements
         self.compileStatementes();
@@ -458,9 +474,10 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
         self.write_node_end(NodeType::SUBROUTINE_BODY);
     }
 
-    pub fn compileVarDec(&mut self) {
+    pub fn compileVarDec(&mut self) -> i32 {
         self.write_node_start(NodeType::VAR_DEC);
 
+        let mut vars = 1;
         // var
         let varKind = VarKind::VAR;
         self.write_token_with_consume();
@@ -500,7 +517,8 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
         self.current_token == Token::Symbol(",".to_string())} {
             //,
             self.write_token_with_consume();
-
+            
+            vars += 1;
             // varName
             self.consume();
             let var_name = self.get_current_token_name();
@@ -519,6 +537,7 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
         self.write_token_with_consume();
 
         self.write_node_end(NodeType::VAR_DEC);
+        vars
     }
 
     pub fn compileStatementes(&mut self) {
@@ -581,23 +600,35 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
 
         // ;
         self.write_token_with_consume();
+
+        // assign
+        self.vw.writePop(convert_varKind_to_segment(&info.varKind.unwrap()), info.index.unwrap());
         
         self.write_node_end(NodeType::LET_STATEMENT);
     }
 
     pub fn compileIf(&mut self) {
         self.write_node_start(NodeType::IF_STATEMENT);
+        let if_label = self.next_if_label;
+        self.next_if_label += 1;
 
         // if
         self.write_token_with_consume();
 
-        // (
-        self.write_token_with_consume();
+       self.write_token_with_consume();
         
         self.compileExpression();
 
         // )
         self.write_token_with_consume();
+
+        // vm
+        // if-goto IF_TRUEX
+        // goto IF_FALSEX
+        // label IF_TRUEX
+        self.vw.writeIf(&format!("IF_TRUE{}", if_label));
+        self.vw.writeGoto(&format!("IF_FALSE{}", if_label)); 
+        self.vw.writeLabel(&format!("IF_TRUE{}", if_label)); 
 
         // {
         self.write_token_with_consume();
@@ -609,6 +640,10 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
 
         self.consume();
         if self.current_token == Token::Keyword(KeywordType::ELSE) {
+
+            self.vw.writeGoto(&format!("IF_END{}", if_label));
+            self.vw.writeLabel(&format!("IF_FALSE{}", if_label));
+
             // else
             self.write_token_with_consume();
 
@@ -619,6 +654,11 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
 
             // }
             self.write_token_with_consume();
+
+            self.vw.writeLabel(&format!("IF_END{}", if_label));
+        }
+        else {
+            self.vw.writeLabel(&format!("IF_FALSE{}", if_label)); 
         }
 
         self.write_node_end(NodeType::IF_STATEMENT);
@@ -626,15 +666,20 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
 
     pub fn compileWhile(&mut self) {
         self.write_node_start(NodeType::WHILE_STATEMENT);
+        let while_label = self.next_while_label;
+        self.next_while_label += 1;
 
         // while
         self.write_token_with_consume();
-
+        
         // (
         self.write_token_with_consume();
-
+        
+        self.vw.writeLabel(&format!("WHILE_EXP{}", while_label)); 
         self.compileExpression();
-
+        self.vw.writeArithmetic(Command::NOT);
+        self.vw.writeIf(&format!("WHILE_END{}", while_label));
+        
         // )
         self.write_token_with_consume();
 
@@ -642,10 +687,12 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
         self.write_token_with_consume();
 
         self.compileStatementes();
+        self.vw.writeGoto(&format!("WHILE_EXP{}", while_label)); 
 
         // }
         self.write_token_with_consume();
 
+        self.vw.writeLabel(&format!("WHILE_END{}", while_label)); 
         self.write_node_end(NodeType::WHILE_STATEMENT);
     }
 
@@ -831,6 +878,14 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
         }
         else if let Token::Keyword(kw) = &self.current_token {
             // KeywordConst
+            match kw {
+                KeywordType::TRUE => {
+                    self.vw.writePush(Segment::CONST, 0);
+                    self.vw.writeArithmetic(Command::NOT);
+                },
+                KeywordType::FALSE | KeywordType::NULL => { self.vw.writePush(Segment::CONST, 0); },
+                _ => {},
+            }
             self.write_token_with_consume();
         } 
         else if self.current_token == Token::Symbol("(".to_string()) {
@@ -851,7 +906,7 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
 
             self.compileTerm();
 
-            self.write_arithmetic(&op_token);
+            self.write_unary_arithmetic(&op_token);
         }
         else {
             // identifier
@@ -952,6 +1007,8 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
                 };
                 self.write_identifier_info(&info);
 
+                self.vw.writePush(convert_varKind_to_segment(&info.varKind.unwrap()), info.index.unwrap());
+
                 // lookahead is not processed, turn on flag
                 self.is_lookahead = true;
             }
@@ -969,15 +1026,25 @@ impl<R: io::Read + io::Seek, W: io::Write + Clone> CompilationEngine<R, W> {
                 "/" => { self.vw.writeCall("Math.divide", 2); },
                 "&" => { self.vw.writeArithmetic(Command::AND); },
                 "|" => { self.vw.writeArithmetic(Command::OR); },
-                "<" => { self.vw.writeArithmetic(Command::GT); },
-                ">" => { self.vw.writeArithmetic(Command::LT); },
+                "<" => { self.vw.writeArithmetic(Command::LT); },
+                ">" => { self.vw.writeArithmetic(Command::GT); },
                 "=" => { self.vw.writeArithmetic(Command::EQ); },
                 _ => {},
             }
             _ => {},
         }
     }
-    
+
+    fn write_unary_arithmetic(&mut self, tk: &Token) {
+        match tk {
+            Token::Symbol(s) => match s.as_str() {
+                "~" => { self.vw.writeArithmetic(Command::NOT); },
+                "-" => { self.vw.writeArithmetic(Command::NEG); },
+                _ => {},
+            }
+            _ => {},
+        }
+    }
 }
 
 fn convert_keyword(keyword_type: KeywordType) -> String {
@@ -1045,6 +1112,14 @@ fn convert_varKind_to_IdentifierCategory(varKind: &VarKind) -> IdentifierCategor
         VarKind::FIELD => IdentifierCategory::FIELD,
     }
 }
+fn convert_varKind_to_segment(varKind: &VarKind) -> Segment {
+    match varKind {
+        VarKind::VAR => Segment::LOCAL,
+        VarKind::ARG => Segment::ARG,
+        VarKind::STATIC => Segment::STATIC,
+        VarKind::FIELD => Segment::THIS,
+    }
+} 
 
 fn to_xml_elem(token: &Token, level: usize) -> String {
     let elem = convert_token_to_strings(token);
@@ -1093,13 +1168,19 @@ fn get_classfunc_name(class_name: &str, func_name: &str) -> String {
 mod tests{
     use super::*;
     
+    fn rawstr_to_code(s: &str) -> String {
+        let mut sw = s.to_string();
+        sw.remove(0);
+        sw.replace("\n", "\r\n")
+    }
+
     #[test]
     fn SimplestClass() {
         let s = io::Cursor::new("\
         class Main {}
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w);
+        let mut c = CompilationEngine::new(s, w.clone(), w);
 
         c.compileClass();
         let mut r = r#"
@@ -1124,7 +1205,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w);
+        let mut c = CompilationEngine::new(s, w.clone(), w);
 
         c.compileClass();
         let mut r = r#"
@@ -1164,7 +1245,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w);
+        let mut c = CompilationEngine::new(s, w.clone(), w);
 
         c.compileClass();
         let mut r = r#"
@@ -1210,7 +1291,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w);
+        let mut c = CompilationEngine::new(s, w.clone(), w);
 
         c.compileClass();
         let mut r = r#"
@@ -1288,7 +1369,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w);
+        let mut c = CompilationEngine::new(s, w.clone(), w);
 
         c.compileClass();
         let mut r = r#"
@@ -1401,22 +1482,22 @@ mod tests{
 
     #[test]
     fn CodeGenaration_Seven() {
-        let s = io::Cursor::new("\
-        class Main {\r\n\
-            \r\n\
-           function void main() {\r\n\
-              do Output.printInt(1 + (2 * 3));\r\n\
-              return;\r\n\
-           }\r\n\
-           \r\n\
-        }\r\n\
-        ");
+        let s = io::Cursor::new(rawstr_to_code(r#"
+class Main {
+    
+    function void main() {
+        do Output.printInt(1 + (2 * 3));
+        return;
+    }
+    
+}
+"#));
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w);
-        // c.xml_mode = false;
+        let mut c = CompilationEngine::new(s, w.clone(), w);
+        c.xml_mode = false;
         c.compileClass();
 
-        let mut r = r#"
+        let r = rawstr_to_code(r#"
 function Main.main 0
 push constant 1
 push constant 2
@@ -1427,10 +1508,196 @@ call Output.printInt 1
 pop temp 0
 push constant 0
 return
-"#.to_string();
-        r.remove(0);
-        r = r.replace("\n", "\r\n");
-        // assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+"#);
         assert_eq!(c.vw.dump_string(), r);
+    }
+
+    #[test]
+    fn CodeGenaration_If() {
+        let s = io::Cursor::new(rawstr_to_code(r#"
+class Main {
+    
+    function int main(int mask) {
+        if (mask = 0) {
+            return 1;
+        } 
+        else {
+            return mask * 2;
+        }
+    }
+    
+}
+"#));
+        let w = io::Cursor::new(Vec::new());
+        let mut c = CompilationEngine::new(s, w.clone(), w);
+        c.xml_mode = false;
+        c.compileClass();
+
+        let r = rawstr_to_code(r#"
+function Main.main 0
+push argument 0
+push constant 0
+eq
+if-goto IF_TRUE0
+goto IF_FALSE0
+label IF_TRUE0
+push constant 1
+return
+goto IF_END0
+label IF_FALSE0
+push argument 0
+push constant 2
+call Math.multiply 2
+return
+label IF_END0
+"#);
+        assert_eq!(c.vw.dump_string(), r);
+    }
+
+    #[test]
+    fn CodeGenaration_Multi_If() {
+        let s = io::Cursor::new(rawstr_to_code(r#"
+class Main {
+    
+    function void main(int mask) {
+        if (mask < 1) {
+            if (mask = 0) {
+                return;
+            } 
+            else {
+                return;
+            }
+        }
+
+        if (mask > 0) {
+        }
+        return;
+    }
+    
+}
+"#));
+        let w = io::Cursor::new(Vec::new());
+        let mut c = CompilationEngine::new(s, w.clone(), w);
+        c.xml_mode = false;
+        c.compileClass();
+
+        let r = rawstr_to_code(r#"
+function Main.main 0
+push argument 0
+push constant 1
+lt
+if-goto IF_TRUE0
+goto IF_FALSE0
+label IF_TRUE0
+push argument 0
+push constant 0
+eq
+if-goto IF_TRUE1
+goto IF_FALSE1
+label IF_TRUE1
+push constant 0
+return
+goto IF_END1
+label IF_FALSE1
+push constant 0
+return
+label IF_END1
+label IF_FALSE0
+push argument 0
+push constant 0
+gt
+if-goto IF_TRUE2
+goto IF_FALSE2
+label IF_TRUE2
+label IF_FALSE2
+push constant 0
+return
+"#);
+        assert_eq!(c.vw.dump_string(), r);
+    }
+
+    #[test]
+    fn CodeGenaration_While() {
+        let s = io::Cursor::new(rawstr_to_code(r#"
+class Main {
+    
+    function void main(int startAddress, int length, int value) {
+        while (length > 0) {
+            do Memory.poke(startAddress, value);
+            let length = length - 1;
+            let startAddress = startAddress + 1;
+        }
+        return;
+    }
+    
+}
+"#));
+        let w = io::Cursor::new(Vec::new());
+        let mut c = CompilationEngine::new(s, w.clone(), w);
+        c.xml_mode = false;
+        c.compileClass();
+
+        let r = rawstr_to_code(r#"
+function Main.main 0
+label WHILE_EXP0
+push argument 1
+push constant 0
+gt
+not
+if-goto WHILE_END0
+push argument 0
+push argument 2
+call Memory.poke 2
+pop temp 0
+push argument 1
+push constant 1
+sub
+pop argument 1
+push argument 0
+push constant 1
+add
+pop argument 0
+goto WHILE_EXP0
+label WHILE_END0
+push constant 0
+return
+"#);
+        assert_eq!(c.vw.dump_string(), r);
+    }
+
+    #[test]
+    fn compile_Seven() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Seven/Main.jack");
+            let w_xml = std::fs::File::create("Seven/Main_compile.xml");
+            let w = std::fs::File::create("Seven/Main_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Seven/Main.vm").unwrap();
+        let al = std::fs::read_to_string("Seven/Main_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn compile_ConvertToBin() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("ConvertToBin/Main.jack");
+            let w_xml = std::fs::File::create("ConvertToBin/Main_compile.xml");
+            let w = std::fs::File::create("ConvertToBin/Main_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("ConvertToBin/Main.vm").unwrap();
+        let al = std::fs::read_to_string("ConvertToBin/Main_compile.vm").unwrap();
+        assert_eq!(result_string, al);
     }
 }
