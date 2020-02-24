@@ -1944,4 +1944,21 @@ return
         assert_eq!(result_string, al);
     }
 
+    #[test]
+    fn compile_ComplexArrays() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("ComplexArrays/Main.jack");
+            let w_xml = std::fs::File::create("ComplexArrays/Main_compile.xml");
+            let w = std::fs::File::create("ComplexArrays/Main_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("ComplexArrays/Main.vm").unwrap();
+        let al = std::fs::read_to_string("ComplexArrays/Main.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
 }
