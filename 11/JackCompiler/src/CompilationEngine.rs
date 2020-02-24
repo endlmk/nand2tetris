@@ -353,6 +353,11 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
         self.subroutine_name = sr_info.name.clone();
 
+        // define instance this 
+        if self.is_method {
+            self.table.define("this", &self.class_name, &VarKind::ARG);
+        }
+
         // (
         self.write_token_with_consume();
 
@@ -1866,4 +1871,77 @@ return
         let al = std::fs::read_to_string("Average/Main_compile.vm").unwrap();
         assert_eq!(result_string, al);
     }
+
+    #[test]
+    fn compile_Pong_Main() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Pong/Main.jack");
+            let w_xml = std::fs::File::create("Pong/Main_compile.xml");
+            let w = std::fs::File::create("Pong/Main_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Pong/Main.vm").unwrap();
+        let al = std::fs::read_to_string("Pong/Main_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn compile_Pong_Ball() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Pong/Ball.jack");
+            let w_xml = std::fs::File::create("Pong/Ball_compile.xml");
+            let w = std::fs::File::create("Pong/Ball_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Pong/Ball.vm").unwrap();
+        let al = std::fs::read_to_string("Pong/Ball_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn compile_Pong_Bat() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Pong/Bat.jack");
+            let w_xml = std::fs::File::create("Pong/Bat_compile.xml");
+            let w = std::fs::File::create("Pong/Bat_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Pong/Bat.vm").unwrap();
+        let al = std::fs::read_to_string("Pong/Bat_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn compile_Pong_PongGame() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Pong/PongGame.jack");
+            let w_xml = std::fs::File::create("Pong/PongGame_compile.xml");
+            let w = std::fs::File::create("Pong/PongGame_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Pong/PongGame.vm").unwrap();
+        let al = std::fs::read_to_string("Pong/PongGame_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
 }
