@@ -609,7 +609,10 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
         // [ or =
         self.consume();
+        let mut is_array = false;
         if self.current_token == Token::Symbol("[".to_string()) {
+            is_array = true;
+
             // [
             self.write_token_with_consume();
             
@@ -617,7 +620,11 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
             // ] 
             self.write_token_with_consume();
-            
+
+            // convert address calculation
+            self.vw.writePush(convert_varKind_to_segment(&info.varKind.as_ref().unwrap()), info.index.clone().unwrap());
+            self.vw.writeArithmetic(Command::ADD);
+
             // = 
             self.write_token_with_consume();
         }
@@ -631,8 +638,19 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         // ;
         self.write_token_with_consume();
 
-        // assign
-        self.vw.writePop(convert_varKind_to_segment(&info.varKind.unwrap()), info.index.unwrap());
+        if is_array {
+            // save expression result to temp 
+            self.vw.writePop(Segment::TEMP, 0);
+            // access address
+            self.vw.writePop(Segment::POINTER, 1);
+            // assign temp
+            self.vw.writePush(Segment::TEMP, 0);
+            self.vw.writePop(Segment::THAT, 0);
+        }
+        else {
+            // assign
+            self.vw.writePop(convert_varKind_to_segment(&info.varKind.unwrap()), info.index.unwrap());
+        }
         
         self.write_node_end(NodeType::LET_STATEMENT);
     }
@@ -913,6 +931,17 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         }
         else if let Token::StringConst(s) = &self.current_token {
             // StringConst
+            
+            // String.new(length)
+            self.vw.writePush(Segment::CONST, s.len() as i32);
+            self.vw.writeCall("String.new", 1);
+
+            // String.appendChar(asciicode)
+            for c in s.chars() {
+                self.vw.writePush(Segment::CONST, c as i32);
+                self.vw.writeCall("String.appendChar", 2);
+            }
+
             self.write_token_with_consume();
         }
         else if let Token::Keyword(kw) = &self.current_token {
@@ -1042,13 +1071,21 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.write_identifier_info(&info);
                 // lookahead is not processed, turn on flag
                 self.is_lookahead = true;
-                
+
                 // [
                 self.write_token_with_consume();
 
                 self.compileExpression();
     
                 // ]
+
+                // convert address calculation
+                self.vw.writePush(convert_varKind_to_segment(&info.varKind.unwrap()), info.index.unwrap());
+                self.vw.writeArithmetic(Command::ADD);
+                // access address
+                self.vw.writePop(Segment::POINTER, 1);
+                self.vw.writePush(Segment::THAT, 0);
+
                 self.write_token_with_consume();
             }
             else {
@@ -1809,6 +1846,24 @@ return
 
         let result_string = std::fs::read_to_string("Square/SquareGame.vm").unwrap();
         let al = std::fs::read_to_string("Square/SquareGame_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn compile_Average() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Average/Main.jack");
+            let w_xml = std::fs::File::create("Average/Main_compile.xml");
+            let w = std::fs::File::create("Average/Main_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Average/Main.vm").unwrap();
+        let al = std::fs::read_to_string("Average/Main_compile.vm").unwrap();
         assert_eq!(result_string, al);
     }
 }
