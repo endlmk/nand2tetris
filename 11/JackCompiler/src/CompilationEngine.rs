@@ -16,6 +16,9 @@ pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     subroutine_name: String,
     next_if_label: i32,
     next_while_label: i32,
+    is_constructor: bool,
+    is_method: bool,
+    fields_count: i32,
 }
 
 enum NodeType {
@@ -117,6 +120,9 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             subroutine_name: "".to_string(),
             next_if_label: 0,
             next_while_label: 0,
+            is_constructor: false,
+            is_method: false,
+            fields_count: 0,
         }
     }
 
@@ -257,6 +263,9 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.write_identifier_info(&info);
         }
 
+        if varKind == VarKind::FIELD {
+            self.fields_count += 1;
+        }
         // varName
         self.consume();
         let var_name = self.get_current_token_name();
@@ -275,6 +284,9 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             // ,
             self.write_token_with_consume();
 
+            if varKind == VarKind::FIELD {
+                self.fields_count += 1;
+            }
             // varName
             self.consume();
             let var_name = self.get_current_token_name();
@@ -303,6 +315,9 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
         // constructor/function/method
         self.write_token_with_consume();
+
+        self.is_constructor = self.current_token == Token::Keyword(KeywordType::CONSTRUCTOR);
+        self.is_method = self.current_token == Token::Keyword(KeywordType::METHOD);
 
         // void|type
         self.consume();
@@ -464,6 +479,21 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
         // reset if/while label
         self.next_if_label = 0;
         self.next_while_label = 0;
+
+        // insert Memory Alloc if constructor
+        // this = Memory.alloc fields_count
+        if self.is_constructor {
+            self.vw.writePush(Segment::CONST, self.fields_count);
+            self.vw.writeCall("Memory.alloc", 1);
+            self.vw.writePop(Segment::POINTER, 0);
+        }
+
+        // insert instance 
+        // this = arg0
+        if self.is_method {
+            self.vw.writePush(Segment::ARG, 0);
+            self.vw.writePop(Segment::POINTER, 0);
+        }
 
         // statements
         self.compileStatementes();
@@ -720,6 +750,9 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             // lookahead is not processed, turn on flag
             self.is_lookahead = true;
 
+            // call of class member function, so add argument this.
+            self.vw.writePush(Segment::POINTER, 0);
+
             // (
             self.write_token_with_consume();
 
@@ -728,7 +761,8 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             // )
             self.write_token_with_consume();
 
-            self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), args);
+            // argument conatins this.
+            self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), args + 1);
         } 
         else if self.current_token == Token::Symbol(".".to_string()) {
             let vk = self.table.kindOf(&name);
@@ -761,6 +795,10 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             // (
             self.write_token_with_consume();
 
+            if info.cat != IdentifierCategory::CLASS {
+                // instance call
+                self.vw.writePush(convert_varKind_to_segment(&info.varKind.unwrap()), info.index.unwrap());
+            }
             let args = self.compileExpressionList();
 
             // )
@@ -770,7 +808,8 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.vw.writeCall(&get_classfunc_name(&info.name, &sr_info.name), args);
             }
             else {
-
+                // args must contain instance
+                self.vw.writeCall(&get_classfunc_name(&self.table.typeOf(&info.name), &sr_info.name), args + 1);    
             }
         } 
 
@@ -884,6 +923,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                     self.vw.writeArithmetic(Command::NOT);
                 },
                 KeywordType::FALSE | KeywordType::NULL => { self.vw.writePush(Segment::CONST, 0); },
+                KeywordType::THIS => { self.vw.writePush(Segment::POINTER, 0); },
                 _ => {},
             }
             self.write_token_with_consume();
@@ -916,14 +956,15 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
             self.consume();
             let elem = convert_token_to_strings(&self.current_token);             
             if self.current_token == Token::Symbol(".".to_string()) {
-                let class_info = IdentifierInfo {
-                    name: name,
-                    cat: IdentifierCategory::CLASS,
+                let vk = self.table.kindOf(&name);
+                let info = IdentifierInfo{
+                    name: name.clone(),
+                    cat: if vk.is_none() { IdentifierCategory::CLASS } else { convert_varKind_to_IdentifierCategory(&vk.clone().unwrap()) },
                     usage: IdentifierUsage::USED,
-                    varKind: None,
-                    index: None,
+                    varKind: vk.clone(),
+                    index: if vk.is_none() { None } else { Some(self.table.indexOf(&name)) },   
                 };
-                self.write_identifier_info(&class_info);
+                self.write_identifier_info(&info);
                 // lookahead is not processed, turn on flag
                 self.is_lookahead = true;
 
@@ -945,12 +986,23 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 // (
                 self.write_token_with_consume();
 
+                if info.cat != IdentifierCategory::CLASS {
+                    // instance call
+                    self.vw.writePush(convert_varKind_to_segment(&info.varKind.unwrap()), info.index.unwrap());
+                }
+
                 let args = self.compileExpressionList();
 
                 // )
                 self.write_token_with_consume();
 
-                self.vw.writeCall(&get_classfunc_name(&class_info.name, &sr_info.name), args);
+                if info.cat == IdentifierCategory::CLASS {
+                    self.vw.writeCall(&get_classfunc_name(&info.name, &sr_info.name), args);
+                }
+                else {
+                    // args must contain instance
+                    self.vw.writeCall(&get_classfunc_name(&self.table.typeOf(&info.name), &sr_info.name), args + 1);    
+                }
             } 
             else if self.current_token == Token::Symbol("(".to_string()) {
                 let info = IdentifierInfo {
@@ -967,12 +1019,16 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 // (
                 self.write_token_with_consume();
 
+                // call of class member function, so add argument this.
+                self.vw.writePush(Segment::POINTER, 0);
+
                 let args = self.compileExpressionList();
 
                 // )
                 self.write_token_with_consume();
 
-                self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), args);
+                // argument conatins this.
+                self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), args + 1);
             } 
             else if self.current_token == Token::Symbol("[".to_string()) {
                 let vk = self.table.kindOf(&name);
@@ -1698,6 +1754,61 @@ return
 
         let result_string = std::fs::read_to_string("ConvertToBin/Main.vm").unwrap();
         let al = std::fs::read_to_string("ConvertToBin/Main_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+
+    #[test]
+    fn compile_Square_Main() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Square/Main.jack");
+            let w_xml = std::fs::File::create("Square/Main_compile.xml");
+            let w = std::fs::File::create("Square/Main_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Square/Main.vm").unwrap();
+        let al = std::fs::read_to_string("Square/Main_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn compile_Square_Square1() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Square/Square.jack");
+            let w_xml = std::fs::File::create("Square/Square_compile.xml");
+            let w = std::fs::File::create("Square/Square_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Square/Square.vm").unwrap();
+        let al = std::fs::read_to_string("Square/Square_compile.vm").unwrap();
+        assert_eq!(result_string, al);
+    }
+
+    #[test]
+    fn compile_Square_SquareGame() {
+        // CompilationEngine must be scoped to drop.
+        // If not, BufWriter will not be flushed. 
+        {
+            let s = std::fs::File::open("Square/SquareGame.jack");
+            let w_xml = std::fs::File::create("Square/SquareGame_compile.xml");
+            let w = std::fs::File::create("Square/SquareGame_compile.vm");
+
+            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            c.compileClass();
+        }
+
+        let result_string = std::fs::read_to_string("Square/SquareGame.vm").unwrap();
+        let al = std::fs::read_to_string("Square/SquareGame_compile.vm").unwrap();
         assert_eq!(result_string, al);
     }
 }
