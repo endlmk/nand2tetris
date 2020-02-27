@@ -5,7 +5,7 @@ use super::VMWriter::*;
 
 pub struct CompilationEngine<R: io::Read + io::Seek, W: io::Write> {
     tokenizer: JackTokenizer<R>,
-    fs: io::BufWriter<W>,
+    fs: Option<io::BufWriter<W>>,
     current_token: Token,
     level: usize,
     is_lookahead: bool,
@@ -106,10 +106,13 @@ impl std::fmt::Display for IdentifierInfo {
 }
 
 impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
-    pub fn new(reader: R, writer_xml: W, writer_vm: W) -> Self {
+    pub fn new(reader: R, writer_vm: W, writer_xml: Option<W>) -> Self {
         CompilationEngine {
             tokenizer: JackTokenizer::new(reader),
-            fs: io::BufWriter::new(writer_xml),
+            fs: match writer_xml {
+                Some(w) => Some(io::BufWriter::new(w)),
+                None => None,
+            },
             current_token: Token::Keyword(KeywordType::CLASS),
             level: 0,
             is_lookahead: false,
@@ -144,14 +147,14 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
     fn write_node_start(&mut self, node_type: NodeType) {
         let s = indentation(&create_open_tag(&convert_node(node_type)), self.level);
-        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
+        if let Some(w) = &mut self.fs { w.write_all(s.as_bytes()); }
         self.level += 2;
     }
 
     fn write_node_end(&mut self, node_type: NodeType) {
         self.level -= 2;
         let s = indentation(&create_close_tag(&convert_node(node_type)), self.level);
-        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
+        if let Some(w) = &mut self.fs { w.write_all(s.as_bytes()); }
     }
 
     fn get_current_token(&mut self) -> &Token {
@@ -172,14 +175,14 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
     fn write_identifier_info(&mut self, info: &IdentifierInfo) {
         let l = self.level;
         let s = to_identifier_xml_elem(info, l);
-        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
+        if let Some(w) = &mut self.fs { w.write_all(s.as_bytes()); }
         self.is_lookahead = false;
     }
 
     fn write_token_with_consume(&mut self) {
         let l = self.level;
         let s = to_xml_elem(self.get_current_token(), l);
-        if self.xml_mode { self.fs.write_all(s.as_bytes()); }
+        if let Some(w) = &mut self.fs { w.write_all(s.as_bytes()); }
         self.is_lookahead = false;
     }
 
@@ -1052,9 +1055,11 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
 
                 // (
                 self.write_token_with_consume();
-
-                // call of class member function, so add argument this.
-                self.vw.writePush(Segment::POINTER, 0);
+                
+                if self.is_method {
+                    // call of class member function, so add argument this.
+                    self.vw.writePush(Segment::POINTER, 0);
+                }
 
                 let args = self.compileExpressionList();
 
@@ -1062,7 +1067,7 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 self.write_token_with_consume();
 
                 // argument conatins this.
-                self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), args + 1);
+                self.vw.writeCall(&get_classfunc_name(&self.class_name, &info.name), if self.is_method { args + 1 } else { args });
             } 
             else if self.current_token == Token::Symbol("[".to_string()) {
                 let vk = self.table.kindOf(&name);
@@ -1278,7 +1283,7 @@ mod tests{
         class Main {}
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w.clone(), Some(w));
 
         c.compileClass();
         let mut r = r#"
@@ -1291,7 +1296,7 @@ mod tests{
 "#.to_string();
         r.remove(0);
         r = r.replace("\n", "\r\n");
-        assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+        assert_eq!(String::from_utf8(c.fs.unwrap().buffer().to_vec()).unwrap(), r);
     }
 
     #[test]
@@ -1303,7 +1308,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w.clone(), Some(w));
 
         c.compileClass();
         let mut r = r#"
@@ -1330,7 +1335,7 @@ mod tests{
 "#.to_string();
         r.remove(0);
         r = r.replace("\n", "\r\n");
-        assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+        assert_eq!(String::from_utf8(c.fs.unwrap().buffer().to_vec()).unwrap(), r);
     }
 
     #[test]
@@ -1343,7 +1348,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w.clone(), Some(w));
 
         c.compileClass();
         let mut r = r#"
@@ -1375,7 +1380,7 @@ mod tests{
 "#.to_string();
         r.remove(0);
         r = r.replace("\n", "\r\n");
-        assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+        assert_eq!(String::from_utf8(c.fs.unwrap().buffer().to_vec()).unwrap(), r);
     }
     #[test]
     fn Subroutine_do_statement() {
@@ -1389,7 +1394,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w.clone(), Some(w));
 
         c.compileClass();
         let mut r = r#"
@@ -1445,7 +1450,7 @@ mod tests{
 "#.to_string();
         r.remove(0);
         r = r.replace("\n", "\r\n");
-        assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+        assert_eq!(String::from_utf8(c.fs.unwrap().buffer().to_vec()).unwrap(), r);
     }
 
 
@@ -1467,7 +1472,7 @@ mod tests{
         }\r\n\
         ");
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w.clone(), Some(w));
 
         c.compileClass();
         let mut r = r#"
@@ -1574,7 +1579,7 @@ mod tests{
 "#.to_string();
         r.remove(0);
         r = r.replace("\n", "\r\n");
-        assert_eq!(String::from_utf8(c.fs.buffer().to_vec()).unwrap(), r);
+        assert_eq!(String::from_utf8(c.fs.unwrap().buffer().to_vec()).unwrap(), r);
     }
 
 
@@ -1591,7 +1596,7 @@ class Main {
 }
 "#));
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w, None);
         c.xml_mode = false;
         c.compileClass();
 
@@ -1627,7 +1632,7 @@ class Main {
 }
 "#));
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w, None);
         c.xml_mode = false;
         c.compileClass();
 
@@ -1675,7 +1680,7 @@ class Main {
 }
 "#));
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w, None);
         c.xml_mode = false;
         c.compileClass();
 
@@ -1731,7 +1736,7 @@ class Main {
 }
 "#));
         let w = io::Cursor::new(Vec::new());
-        let mut c = CompilationEngine::new(s, w.clone(), w);
+        let mut c = CompilationEngine::new(s, w, None);
         c.xml_mode = false;
         c.compileClass();
 
@@ -1772,7 +1777,7 @@ return
             let w_xml = std::fs::File::create("Seven/Main_compile.xml");
             let w = std::fs::File::create("Seven/Main_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1790,7 +1795,7 @@ return
             let w_xml = std::fs::File::create("ConvertToBin/Main_compile.xml");
             let w = std::fs::File::create("ConvertToBin/Main_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1809,7 +1814,7 @@ return
             let w_xml = std::fs::File::create("Square/Main_compile.xml");
             let w = std::fs::File::create("Square/Main_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1827,7 +1832,7 @@ return
             let w_xml = std::fs::File::create("Square/Square_compile.xml");
             let w = std::fs::File::create("Square/Square_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1845,7 +1850,7 @@ return
             let w_xml = std::fs::File::create("Square/SquareGame_compile.xml");
             let w = std::fs::File::create("Square/SquareGame_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1863,7 +1868,7 @@ return
             let w_xml = std::fs::File::create("Average/Main_compile.xml");
             let w = std::fs::File::create("Average/Main_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1881,7 +1886,7 @@ return
             let w_xml = std::fs::File::create("Pong/Main_compile.xml");
             let w = std::fs::File::create("Pong/Main_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1899,7 +1904,7 @@ return
             let w_xml = std::fs::File::create("Pong/Ball_compile.xml");
             let w = std::fs::File::create("Pong/Ball_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1917,7 +1922,7 @@ return
             let w_xml = std::fs::File::create("Pong/Bat_compile.xml");
             let w = std::fs::File::create("Pong/Bat_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1935,7 +1940,7 @@ return
             let w_xml = std::fs::File::create("Pong/PongGame_compile.xml");
             let w = std::fs::File::create("Pong/PongGame_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
@@ -1953,7 +1958,7 @@ return
             let w_xml = std::fs::File::create("ComplexArrays/Main_compile.xml");
             let w = std::fs::File::create("ComplexArrays/Main_compile.vm");
 
-            let mut c = CompilationEngine::new(s.unwrap(), w_xml.unwrap(), w.unwrap());
+            let mut c = CompilationEngine::new(s.unwrap(), w.unwrap(), Some(w_xml.unwrap()));
             c.compileClass();
         }
 
