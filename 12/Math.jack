@@ -70,9 +70,9 @@ class Math {
             do Sys.error(3);
         }
         if (((x < 0) & (y > 0)) | ((x > 0) & (y < 0))) {
-            return -(divide_pos_rec(abs(x), abs(y)));
+            return -(Math.divide_pos_rec(Math.abs(x), Math.abs(y)));
         }
-        return divide_pos_rec(abs(x), abs(y));
+        return Math.divide_pos_rec(Math.abs(x), Math.abs(y));
     }
     
     function int divide_pos_rec(int x, int y) {
@@ -80,7 +80,7 @@ class Math {
         if (y > x) {
             return 0;
         }
-        let q = divide(x, y + y);
+        let q = Math.divide_pos_rec(x, y + y);
         if ((x - ((q + q) * y)) < y) {
             return q + q;
         }

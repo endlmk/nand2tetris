@@ -1056,10 +1056,8 @@ impl<R: io::Read + io::Seek, W: io::Write> CompilationEngine<R, W> {
                 // (
                 self.write_token_with_consume();
                 
-                if self.is_method {
-                    // call of class member function, so add argument this.
-                    self.vw.writePush(Segment::POINTER, 0);
-                }
+                // call of class member function, so add argument this.
+                self.vw.writePush(Segment::POINTER, 0);
 
                 let args = self.compileExpressionList();
 
