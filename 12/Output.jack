@@ -191,6 +191,9 @@ class Output {
     /** Moves the cursor to the j-th column of the i-th row,
      *  and erases the character displayed there. */
     function void moveCursor(int i, int j) {
+        if ((i < 0)| (i > 255) | (j < 0) | (j > 511)) {
+            do Sys.error(20);
+        }
         let line = i;
         let column = j;
         do Output.drawChar(0, false);
