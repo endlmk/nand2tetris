@@ -36,9 +36,10 @@ fn main() -> Result<(), std::io::Error> {
             .collect::<Vec<path::PathBuf>>();
         
         for p in jack_files {
-            let f = fs::File::open(p)?;
-            let mut path = std::path::PathBuf::from(input);
+            print!("{:?}", p);
+            let mut path = std::path::PathBuf::from(p.to_string_lossy().to_string());
             path.set_extension("vm");
+            let f = fs::File::open(p)?;
             let w_file_name = path.to_string_lossy().to_string();
             let f_w = fs::File::create(&w_file_name)?;
             let mut c = CompilationEngine::CompilationEngine::new(f, f_w, None);

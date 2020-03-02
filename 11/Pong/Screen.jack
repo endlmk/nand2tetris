@@ -1,0 +1,215 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/12/Screen.jack
+
+/**
+ * A library of functions for displaying graphics on the screen.
+ * The Hack physical screen consists of 512 rows (indexed 0..511, top to bottom)
+ * of 256 pixels each (indexed 0..255, left to right). The top left pixel on 
+ * the screen is indexed (0,0).
+ */
+class Screen {
+    static bool color;
+    static Array power_of_two;
+
+    /** Initializes the Screen. */
+    function void init() {
+        let color = true;
+        let power_of_two = Array.new(15);
+        let power_of_two[0] = 1;
+        let power_of_two[1] = 2;
+        let power_of_two[2] = 4;
+        let power_of_two[3] = 8;
+        let power_of_two[4] = 16;
+        let power_of_two[5] = 32;
+        let power_of_two[6] = 64;
+        let power_of_two[7] = 128;
+        let power_of_two[8] = 256;
+        let power_of_two[9] = 512;
+        let power_of_two[10] = 1024;
+        let power_of_two[11] = 2048;
+        let power_of_two[12] = 4096;
+        let power_of_two[13] = 8192;
+        let power_of_two[14] = 16384;
+        let power_of_two[15] = 16384 + 16384;
+        return;
+    }
+
+    /** Erases the entire screen. */
+    function void clearScreen() {
+        var int i, j;
+        let i = 0;
+        let j = 0;
+        while (i < 256) {
+            while (j < 32) {
+                do Memory.poke(16384 + (i * 32) + j, 0);
+                let j = j + 1;
+            }
+            let i = i + 1;
+        }
+        return;
+    }
+
+    /** Sets the current color, to be used for all subsequent drawXXX commands.
+     *  Black is represented by true, white by false. */
+    function void setColor(boolean b) {
+        let color = b;
+        return;
+    }
+
+    function void isValidCoordinate(int x, int y, int err) {
+        if ((x < 0) | (x > 511) | (y < 0) | (y > 255)) {
+            do Sys.error(err);
+        }
+        return;
+    }
+
+    /** Draws the (x,y) pixel, using the current color. */
+    function void drawPixel(int x, int y) {
+        var int xdiv16, xmod16, addr, val, mask;
+
+        do Screen.isValidCoordinate(x, y, 7);
+
+        let xdiv16 = x / 16;
+        let xmod16 = x - (16 * xdiv16);
+        let addr = 16384 + (y * 32) + xdiv16;
+        let mask = power_of_two[xmod16];
+        let val = Memory.peek(addr);
+        if (color) {
+            let val = val | mask;
+        }
+        else {
+            let val = val & (~mask);
+        }
+        do Memory.poke(addr, val);
+        return;
+    }
+
+    /** Draws a line from pixel (x1,y1) to pixel (x2,y2), using the current color. */
+    function void drawLine(int x1, int y1, int x2, int y2) {
+        var int dx, dy, i, j, det, ox, oy;
+
+        do Screen.isValidCoordinate(x1, y1, 8);
+        do Screen.isValidCoordinate(x2, y2, 8);
+
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+
+        do Screen.drawPixel(x1, y1);
+        if ((dx = 0) & (dy = 0)) {
+            return;
+        }
+
+        if (dx = 0) {
+            let j = 0;
+            while(j < Math.abs(dy)){
+                if (dy > 0) {
+                    do Screen.drawPixel(x1, y1 + (j + 1));
+                }
+                else {
+                    do Screen.drawPixel(x1, y1 - (j + 1));
+                }
+                let j = j + 1;
+            }
+            return;
+        }
+
+        if (dy = 0) {
+            let i = 0;
+            while(i < Math.abs(dx)){
+                if (dx > 0) {
+                    do Screen.drawPixel(x1 + (i + 1), y1);
+                }
+                else {
+                    do Screen.drawPixel(x1 - (i + 1), y1);
+                }
+                let i = i + 1;
+            }
+            return;
+        }
+
+        let i = 0;
+        let j = 0;
+        let ox = 0;
+        let oy = 0;
+        let det = 0;
+        while ((i < Math.abs(dx)) & (j < Math.abs(dy))) {
+            if (det < 0) {
+                // over
+                if(dy > 0) {
+                    let det = det + dy;
+                }
+                else {
+                    let det = det - dy;
+                }
+                let i = i + 1;
+            }
+            else {
+                // foreground
+                if(dx > 0) {
+                    let det = det - dx;
+                }
+                else {
+                    let det = det + dx;
+                }
+                let j = j + 1;
+            }
+
+            if (dx > 0) {
+                let ox = i;
+            }
+            else {
+                let ox = -i;
+            }
+            
+            if (dy > 0) {
+                let oy = j;
+            }
+            else {
+                let oy = -j;
+            }
+            do Screen.drawPixel(x1 + ox, y1 + oy);
+        }
+        return;
+    }
+
+    /** Draws a filled rectangle whose top left corner is (x1, y1)
+     * and bottom right corner is (x2,y2), using the current color. */
+    function void drawRectangle(int x1, int y1, int x2, int y2) {
+        var int j, ytop, lines;
+
+        do Screen.isValidCoordinate(x1, y1, 9);
+        do Screen.isValidCoordinate(x2, y2, 9);
+
+        let lines = Math.abs(y2 - y1);
+        let ytop = Math.min(y1, y2);
+        let j = 0;
+        while (j < lines) {
+            do Screen.drawLine(x1, ytop + j, x2, ytop + j);
+            let j = j + 1;
+        }
+        return;
+    }
+
+    /** Draws a filled circle of radius r<=181 around (x,y), using the current color. */
+    function void drawCircle(int x, int y, int r) {
+        var int j, dx;
+
+        if((x < r) | (x > (512 - r)) | (y < r) | (y > (256 - r))) {
+            do Sys.error(12);
+        }
+
+        if((r < 0) | (r > 181)) {
+            do Sys.error(13);
+        }
+
+        let j = -r;
+        while (~(j > r)) {
+            let dx = Math.sqrt((r * r) - (j * j));
+            do Screen.drawLine(x - dx, y + j, x + dx, y + j);
+            let j = j + 1;
+        }
+        return;        
+    }
+}

@@ -1,0 +1,91 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/12/Memory.jack
+
+/**
+ * This library provides two services: direct access to the computer's main
+ * memory (RAM), and allocation and recycling of memory blocks. The Hack RAM
+ * consists of 32,768 words, each holding a 16-bit binary number.
+ */ 
+class Memory {
+    static int freeList;
+
+    /** Initializes the class. */
+    function void init() {
+        let freeList = 2048; // heapBase
+        do Memory.poke(freeList, (16383 - 2048)); // heapLength
+        do Memory.poke(freeList + 1, null);
+        return;
+    }
+
+    /** Returns the RAM value at the given address. */
+    function int peek(int address) {
+        var Array memory;
+        let memory = 0;
+        return memory[address];
+    }
+
+    /** Sets the RAM value at the given address to the given value. */
+    function void poke(int address, int value) {
+        var Array memory;
+        let memory = 0;
+        let memory[address] = value;
+        return;
+    }
+
+    /** Finds an available RAM block of the given size and returns
+     *  a reference to its base address. */
+    function int alloc(int size) {
+        var int next, selectedSegment, requiredSize, usableSize, reducedSize, block;
+
+        if (~(size > 0)) {
+            do Sys.error(5);
+        }
+
+        let next = freeList;
+        let selectedSegment = null;
+        let requiredSize = size + 1;
+        while (~(next = null)) {
+            let usableSize = Memory.peek(next) - 2;
+            if ((usableSize + 1) > requiredSize) {
+                if(selectedSegment = null) {
+                    let selectedSegment = next;
+                }
+                else {
+                    if (Memory.peek(next) < Memory.peek(selectedSegment)) {                    
+                        let selectedSegment = next;
+                    }
+                } 
+            }
+            // iterate next;
+            let next = Memory.peek(next + 1);
+        }
+
+        if (selectedSegment = null) {
+            do Sys.error(6);
+        }
+
+        let reducedSize = Memory.peek(selectedSegment) - requiredSize;
+        do Memory.poke(selectedSegment, reducedSize);
+
+        let block = selectedSegment + reducedSize + 1;
+        do Memory.poke(block - 1, requiredSize);
+        return block;
+    }
+
+    /** De-allocates the given object (cast as an array) by making
+     *  it available for future allocations. */
+    function void deAlloc(Array o) {
+        var int segment, next;
+        let segment = o - 1;
+        do Memory.poke(segment, Memory.peek(o - 1));
+        do Memory.poke(segment + 1, null);
+        let next = freeList;
+        while (~(next = null)) {
+            let next = Memory.peek(segment + 1);
+        }
+        do Memory.poke(next, segment);
+        return;
+    }    
+}
