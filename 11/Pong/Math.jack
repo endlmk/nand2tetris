@@ -1,3 +1,4 @@
+
 // This file is part of www.nand2tetris.org
 // and the book "The Elements of Computing Systems"
 // by Nisan and Schocken, MIT Press.
@@ -12,7 +13,7 @@ class Math {
 
     /** Initializes the library. */
     function void init() {
-        let power_of_two = Array.new(15);
+        let power_of_two = Array.new(16);
         let power_of_two[0] = 1;
         let power_of_two[1] = 2;
         let power_of_two[2] = 4;

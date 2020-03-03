@@ -12,7 +12,7 @@ class Math {
 
     /** Initializes the library. */
     function void init() {
-        let power_of_two = Array.new(15);
+        let power_of_two = Array.new(1);
         let power_of_two[0] = 1;
         let power_of_two[1] = 2;
         let power_of_two[2] = 4;

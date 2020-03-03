@@ -1,5 +1,5 @@
 function Math.init 0
-push constant 15
+push constant 16
 call Array.new 1
 pop static 0
 push constant 0

@@ -16,7 +16,7 @@ class Screen {
     /** Initializes the Screen. */
     function void init() {
         let color = true;
-        let power_of_two = Array.new(15);
+        let power_of_two = Array.new(16);
         let power_of_two[0] = 1;
         let power_of_two[1] = 2;
         let power_of_two[2] = 4;

@@ -2,7 +2,7 @@ function Memory.init 0
 push constant 2048
 pop static 0
 push static 0
-push constant 16383
+push constant 16384
 push constant 2048
 sub
 call Memory.poke 2

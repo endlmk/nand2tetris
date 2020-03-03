@@ -14,7 +14,7 @@ class Memory {
     /** Initializes the class. */
     function void init() {
         let freeList = 2048; // heapBase
-        do Memory.poke(freeList, (16383 - 2048)); // heapLength
+        do Memory.poke(freeList, (16384 - 2048)); // heapLength
         do Memory.poke(freeList + 1, null);
         return;
     }
