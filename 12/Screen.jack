@@ -116,16 +116,22 @@ class Screen {
         }
 
         if (dy = 0) {
-            let i = 0;
-            while(i < Math.abs(dx)){
-                if (dx > 0) {
-                    do Screen.drawPixel(x1 + (i + 1), y1);
-                }
-                else {
-                    do Screen.drawPixel(x1 - (i + 1), y1);
-                }
-                let i = i + 1;
+            if (dx > 0) {
+                do Screen.drawHorizontalLine(x1, x2, y1);
             }
+            else {
+                do Screen.drawHorizontalLine(x2, x1, y1);
+            }
+            // let i = 0;
+            // while(i < Math.abs(dx)){
+            //     if (dx > 0) {
+            //         do Screen.drawPixel(x1 + (i + 1), y1);
+            //     }
+            //     else {
+            //         do Screen.drawPixel(x1 - (i + 1), y1);
+            //     }
+            //     let i = i + 1;
+            // }
             return;
         }
 
@@ -171,6 +177,67 @@ class Screen {
             }
             do Screen.drawPixel(x1 + ox, y1 + oy);
         }
+        return;
+    }
+
+    function void drawHorizontalLine(int xstart, int xend, int y) {
+        var int div16_xstart, addr_xstart, bit_xstart, div16_xend, addr_xend, bit_xend, j;
+        let div16_xstart = xstart / 16;
+        let bit_xstart = xstart - (16 * div16_xstart);
+        let addr_xstart = 16384 + (y * 32) + div16_xstart;
+
+        let div16_xend = xend / 16;
+        let bit_xend = xend - (16 * div16_xend);
+        let addr_xend = 16384 + (y * 32) + div16_xend;
+
+        if (addr_xstart = addr_xend) {
+            do Screen.draw16bit(addr_xstart, bit_xstart, bit_xend);
+        }
+        else {
+            let j = addr_xstart;
+            while (j < (addr_xend + 1)) {
+                if (j = addr_xstart) {
+                    do Screen.draw16bit(addr_xstart, bit_xstart, 15);
+                }
+                if ((j > addr_xstart) & (j < addr_xend)) {
+                    do Screen.draw16bit(j, 0, 15);
+                }
+                if (j = addr_xend) {
+                    do Screen.draw16bit(addr_xend, 0, bit_xend);
+                }
+                let j = j + 1;
+            }
+        }
+        return;
+    }
+
+    function void draw16bit(int addr, int start, int end) {
+        var int j, mask, val;
+        let val = 0;
+        if ((start = 0) & (end = 15)) {
+            if (color) {
+                let val = -1;
+            }
+            else {
+                let val = 0;
+            }
+        }
+        else {
+            let j = start;
+            let mask = 0;
+            while (j < (end + 1)) {
+                let mask = mask + power_of_two[j];
+                let j = j + 1;
+            }
+            let val = Memory.peek(addr);
+            if (color) {
+                let val = val | mask;
+            }
+            else {
+                let val = val & (~mask);
+            }
+        }
+        do Memory.poke(addr, val);
         return;
     }
 
