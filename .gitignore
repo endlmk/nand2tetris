@@ -1,3 +1,4 @@
-tools
-demo
+.DS_Store
+/tools/
+/demo/
 *.out
